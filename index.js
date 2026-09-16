@@ -6830,157 +6830,204 @@ client.on(
         }
 
         // --------------------------------------------------------------------
-        // CONFIG TICKET TARGET
-        // --------------------------------------------------------------------
+// CONFIG TICKET TARGET
+// --------------------------------------------------------------------
 
-        if (
-          interaction.customId ===
-          'config_ticket_target'
-        ) {
-          const target =
-            interaction.values[0];
+if (
+  interaction.customId ===
+  'config_ticket_target'
+) {
+  const target =
+    interaction.values[0];
 
-          const names = {
-            support_view:
-              'Support • Voir',
-            support_ping:
-              'Support • Ping',
-            claim_view:
-              'Giveaway • Voir',
-            claim_ping:
-              'Giveaway • Ping'
-          };
+  const names = {
+    support_view:
+      'Support • Voir',
 
-          if (
-            target ===
-            'delete'
-          ) {
-            const config =
-              getConfig(
-                interaction.guild.id
-              );
+    support_ping:
+      'Support • Ping',
 
-            config.tickets.deleteAfterClose =
-              !config.tickets.deleteAfterClose;
+    claim_view:
+      'Giveaway • Voir',
 
-            saveConfig(
-              interaction.guild.id,
-              config
-            );
+    claim_ping:
+      'Giveaway • Ping'
+  };
 
-            return interaction.update({
-              flags:
-                MessageFlags.IsComponentsV2,
+  // --------------------------------------------------------------
+  // DELETE AFTER CLOSE
+  // --------------------------------------------------------------
 
-              components: [
-                configCategoryView(
-                  config,
-                  'tickets'
-                )
-              ]
-            });
-          }
+  if (
+    target === 'delete'
+  ) {
+    const config =
+      getConfig(
+        interaction.guild.id
+      );
 
-          if (
-            target ===
-            'support_category' ||
-            target ===
-            'claim_category'
-          ) {
-            const realTarget =
-              target ===
-              'support_category'
-                ? 'ticketCategorySupport'
-                : 'ticketCategoryGiveawayClaim';
+    config.tickets.deleteAfterClose =
+      !config.tickets.deleteAfterClose;
 
-            return interaction.update({
-              flags:
-                MessageFlags.IsComponentsV2,
+    saveConfig(
+      interaction.guild.id,
+      config
+    );
 
-              components: [
-                container({
-                  title:
-                    'Catégorie de tickets',
-                  description:
-                    [
-                      `Paramètre : **${target}**`,
-                      '',
-                      'Sélectionne la catégorie Discord à utiliser.'
-                    ].join('\n'),
+    return interaction.update({
+      flags:
+        MessageFlags.IsComponentsV2,
 
-                  accent:
-                    configCategoryColor(
-                      interaction.guild.id
-                    ),
+      components: [
+        configCategoryView(
+          config,
+          'tickets'
+        )
+      ]
+    });
+  }
 
-                  rows: [
-                    new ActionRowBuilder()
-                      .addComponents(
-                        new ChannelSelectMenuBuilder()
-                          .setCustomId(
-                            `config_ticket_category_value:${realTarget}`
-                          )
-                          .setPlaceholder(
-                            'Choisir une catégorie...'
-                          )
-                          .setMinValues(
-                            1
-                          )
-                          .setMaxValues(
-                            1
-                          )
-                          .setChannelTypes(
-                            ChannelType.GuildCategory
-                          )
-                      ]
-                  ]
-                })
-              ]
-            });
-          }
+  // --------------------------------------------------------------
+  // CATEGORY
+  // --------------------------------------------------------------
 
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
+  if (
+    target === 'support_category' ||
+    target === 'claim_category'
+  ) {
+    const config =
+      getConfig(
+        interaction.guild.id
+      );
 
-            components: [
-              container({
-                title:
-                  `Tickets • ${names[target] || target}`,
+    const realTarget =
+      target === 'support_category'
+        ? 'ticketCategorySupport'
+        : 'ticketCategoryGiveawayClaim';
 
-                description:
-                  [
-                    target.includes('view')
-                      ? 'Choisis les rôles qui pourront voir ce type de ticket.'
-                      : 'Choisis les rôles qui recevront le ping lors de la création de ce type de ticket.',
-                    '',
-                    target.startsWith(
-                      'support'
-                    )
-                      ? '**Type :** Support'
-                      : '**Type :** Giveaway • Réclamation'
-                  ].join('\n'),
+    const picker =
+      new ChannelSelectMenuBuilder()
+        .setCustomId(
+          `config_ticket_category_value:${realTarget}`
+        )
+        .setPlaceholder(
+          'Choisir une catégorie...'
+        )
+        .setMinValues(1)
+        .setMaxValues(1)
+        .setChannelTypes(
+          ChannelType.GuildCategory
+        );
 
-                accent:
-                  configCategoryColor(
-                    interaction.guild.id
-                  ),
+    return interaction.update({
+      flags:
+        MessageFlags.IsComponentsV2,
 
-                rows: [
-                  new ActionRowBuilder()
-                    .addComponents(
-                      buildRolePicker(
-                        `config_ticket_roles:${target}`,
-                        target.includes('view')
-                          ? 'Rôles autorisés à voir...'
-                          : 'Rôles qui seront ping...'
-                      )
-                    )
-                ]
-              })
-            ]
-          });
-        }
+      components: [
+        container({
+          title:
+            'Catégorie de tickets',
+
+          description:
+            [
+              `## ${target === 'support_category'
+                ? 'Support'
+                : 'Giveaway • Réclamation'}`,
+              '',
+              'Sélectionne la catégorie Discord dans laquelle les tickets de ce type seront créés.'
+            ].join('\n'),
+
+          accent:
+            config.appearance.accentColor,
+
+          rows: [
+            new ActionRowBuilder()
+              .addComponents(
+                picker
+              )
+          ],
+
+          footer:
+            `${config.serverName} • Configuration des tickets`
+        })
+      ]
+    });
+  }
+
+  // --------------------------------------------------------------
+  // ROLE VIEW / PING
+  // --------------------------------------------------------------
+
+  const config =
+    getConfig(
+      interaction.guild.id
+    );
+
+  const isViewSetting =
+    target.endsWith('_view');
+
+  const type =
+    target.startsWith('support')
+      ? 'support'
+      : 'giveawayClaim';
+
+  const typeLabel =
+    type === 'support'
+      ? 'Support'
+      : 'Giveaway • Réclamation';
+
+  const rolePicker =
+    buildRolePicker(
+      `config_ticket_roles:${target}`,
+      isViewSetting
+        ? 'Choisir les rôles autorisés à voir...'
+        : 'Choisir les rôles qui seront ping...'
+    );
+
+  return interaction.update({
+    flags:
+      MessageFlags.IsComponentsV2,
+
+    components: [
+      container({
+        title:
+          `Tickets • ${names[target] || target}`,
+
+        description:
+          [
+            `## ${typeLabel}`,
+            '',
+            isViewSetting
+              ? 'Les rôles sélectionnés pourront voir les tickets de ce type.'
+              : 'Les rôles sélectionnés seront ping lorsqu’un ticket de ce type sera créé.',
+            '',
+            `**Configuration actuelle :** ${
+              isViewSetting
+                ? formatRoleList(
+                    config.tickets[type].viewRoleIds
+                  )
+                : formatRoleList(
+                    config.tickets[type].pingRoleIds
+                  )
+            }`
+          ].join('\n'),
+
+        accent:
+          config.appearance.accentColor,
+
+        rows: [
+          new ActionRowBuilder()
+            .addComponents(
+              rolePicker
+            )
+        ],
+
+        footer:
+          `${config.serverName} • Configuration des tickets`
+      })
+    ]
+  });
+}
 
         // --------------------------------------------------------------------
         // CONFIG GIVEAWAY TARGET
