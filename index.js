@@ -1,31 +1,47 @@
 /*
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                              BRETAGNE RP                                    ║
-║                           Discord Bot Core                                  ║
+║                          Discord Bot • v2.0                                  ║
+╠══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                              ║
-║  Node.js 24+                                                                ║
-║  discord.js 14.x                                                            ║
-║  SQLite                                                                      ║
-║  Components V2                                                              ║
+║  BOT                                                                       ║
+║  ├─ Welcome + DM                                                           ║
+║  ├─ Règlement + validation                                                 ║
+║  ├─ Candidatures Staff                                                     ║
+║  ├─ Giveaways + réclamation 24h                                            ║
+║  ├─ Tickets multi-types                                                    ║
+║  ├─ Sessions RP                                                             ║
+║  ├─ Suggestions                                                             ║
+║  ├─ Anti-raid                                                               ║
+║  ├─ Anti-spam                                                               ║
+║  ├─ Anti-mass mention                                                       ║
+║  ├─ Anti-mass delete                                                        ║
+║  ├─ Mots interdits multilingues                                             ║
+║  ├─ Sanctions progressives                                                  ║
+║  └─ Configuration interactive                                               ║
+║                                                                              ║
+║  TEST MODE                                                                  ║
+║  ────────────────────────────────────────────────────────────────────────  ║
+║  Les restrictions de rôle pour /config et /giveaway ne sont PAS forcées    ║
+║  pour le moment. Elles sont enregistrées et prêtes à être activées plus    ║
+║  tard depuis la configuration.                                             ║
+║                                                                              ║
+║  INSTALL                                                                    ║
+║  npm install discord.js better-sqlite3                                      ║
+║                                                                              ║
+║  ENV                                                                         ║
+║  DISCORD_TOKEN=...                                                           ║
+║  CLIENT_ID=...                                                              ║
+║  GUILD_ID=...                                                               ║
+║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
-
-INSTALL:
-npm install discord.js better-sqlite3
-
-ENVIRONMENT:
-DISCORD_TOKEN=...
-CLIENT_ID=...
-GUILD_ID=...
-
-IMPORTANT:
-- This version is intentionally in TEST MODE.
-- Command/channel restrictions are NOT enforced yet.
-- The IDs below are used as default destinations, but can be changed
-  through /config.
-- The bot automatically checks/reuses its panels when it starts.
 */
 
 'use strict';
+
+// ============================================================================
+// IMPORTS
+// ============================================================================
 
 const {
   Client,
@@ -34,27 +50,37 @@ const {
   Events,
   PermissionFlagsBits,
   ChannelType,
+
   ButtonBuilder,
   ButtonStyle,
   ActionRowBuilder,
+
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+
+  ChannelSelectMenuBuilder,
+  RoleSelectMenuBuilder,
+
   ContainerBuilder,
   TextDisplayBuilder,
   SeparatorBuilder,
+
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+
   MessageFlags,
   SlashCommandBuilder,
   REST,
-  Routes
+  Routes,
+
+  AuditLogEvent
 } = require('discord.js');
 
 const Database = require('better-sqlite3');
 
 // ============================================================================
-// ENV
+// ENVIRONMENT
 // ============================================================================
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -62,7 +88,10 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID || null;
 
 if (!TOKEN || !CLIENT_ID) {
-  console.error('❌ DISCORD_TOKEN ou CLIENT_ID manquant.');
+  console.error('');
+  console.error('❌ Configuration manquante.');
+  console.error('DISCORD_TOKEN ou CLIENT_ID n’est pas défini.');
+  console.error('');
   process.exit(1);
 }
 
@@ -114,7 +143,15 @@ CREATE TABLE IF NOT EXISTS giveaways (
   required_role_id TEXT,
   end_at INTEGER NOT NULL,
   participants TEXT NOT NULL DEFAULT '[]',
-  ended INTEGER NOT NULL DEFAULT 0
+  ended INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  current_winner_id TEXT,
+  claim_deadline INTEGER,
+  claim_round INTEGER NOT NULL DEFAULT 0,
+  expired_winners TEXT NOT NULL DEFAULT '[]',
+  announcement_message_id TEXT,
+  claim_ticket_channel_id TEXT,
+  claimed_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS tickets (
@@ -122,6 +159,8 @@ CREATE TABLE IF NOT EXISTS tickets (
   guild_id TEXT NOT NULL,
   channel_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'support',
+  giveaway_id INTEGER,
   opened_at INTEGER NOT NULL,
   closed_at INTEGER
 );
@@ -157,11 +196,110 @@ CREATE TABLE IF NOT EXISTS user_sanctions (
 `);
 
 // ============================================================================
+// DATABASE MIGRATIONS
+// ============================================================================
+
+function tableHasColumn(tableName, columnName) {
+  const columns = db
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all();
+
+  return columns.some(
+    column => column.name === columnName
+  );
+}
+
+function ensureColumn(
+  tableName,
+  columnName,
+  definition
+) {
+  if (!tableHasColumn(tableName, columnName)) {
+    db.exec(`
+      ALTER TABLE ${tableName}
+      ADD COLUMN ${columnName} ${definition}
+    `);
+
+    console.log(
+      `🛠️ DB migration: ${tableName}.${columnName}`
+    );
+  }
+}
+
+ensureColumn(
+  'giveaways',
+  'status',
+  "TEXT NOT NULL DEFAULT 'active'"
+);
+
+ensureColumn(
+  'giveaways',
+  'current_winner_id',
+  'TEXT'
+);
+
+ensureColumn(
+  'giveaways',
+  'claim_deadline',
+  'INTEGER'
+);
+
+ensureColumn(
+  'giveaways',
+  'claim_round',
+  'INTEGER NOT NULL DEFAULT 0'
+);
+
+ensureColumn(
+  'giveaways',
+  'expired_winners',
+  "TEXT NOT NULL DEFAULT '[]'"
+);
+
+ensureColumn(
+  'giveaways',
+  'announcement_message_id',
+  'TEXT'
+);
+
+ensureColumn(
+  'giveaways',
+  'claim_ticket_channel_id',
+  'TEXT'
+);
+
+ensureColumn(
+  'giveaways',
+  'claimed_at',
+  'INTEGER'
+);
+
+ensureColumn(
+  'tickets',
+  'type',
+  "TEXT NOT NULL DEFAULT 'support'"
+);
+
+ensureColumn(
+  'tickets',
+  'giveaway_id',
+  'INTEGER'
+);
+
+// ============================================================================
 // DEFAULT CONFIG
 // ============================================================================
 
 const DEFAULT_CONFIG = {
   serverName: 'Bretagne RP',
+
+  /*
+   * TEST MODE
+   * --------------------------------------------------------------------------
+   * true = role restrictions are not enforced.
+   * false = configured role restrictions become active.
+   */
+  testMode: true,
 
   appearance: {
     accentColor: 0x5865F2,
@@ -176,17 +314,38 @@ const DEFAULT_CONFIG = {
     rules: '1548280076377006220',
     applicationLogs: '1548280161622040687',
     suggestions: '1548280159948251190',
+
     sessions: null,
     logs: null,
-    ticketCategory: null
+
+    /*
+     * The panel can be left blank during testing.
+     * The bot will reuse its previous panel location or find a usable
+     * fallback channel.
+     */
+    ticketPanel: null,
+
+    ticketCategorySupport: null,
+    ticketCategoryGiveawayClaim: null
   },
 
   roles: {
+    /*
+     * Role given after accepting the rules.
+     */
     verified: '1548280026842005594',
+
     staff: null,
-    ticketSupport: null,
+
+    /*
+     * Default role requested by the user for:
+     * - config access
+     * - giveaway management
+     * - current ticket pings
+     */
     config: '1548279987453296643',
-    giveaways: '1548279987453296643'
+    giveaways: '1548279987453296643',
+    ticketSupport: '1548279987453296643'
   },
 
   systems: {
@@ -205,8 +364,6 @@ const DEFAULT_CONFIG = {
     antiMassDelete: true,
     badWords: true
   },
-
-  testMode: true,
 
   welcome: {
     title: 'Bienvenue sur Bretagne RP',
@@ -227,12 +384,60 @@ const DEFAULT_CONFIG = {
       'Quelles sont vos qualités pour ce poste ?',
       'Pourquoi devrions-nous vous accepter ?'
     ],
+
     giveStaffRoleOnAccept: true
   },
 
+  /*
+   * Each ticket type can have its own:
+   * - panel label
+   * - category
+   * - viewer roles
+   * - ping roles
+   */
   tickets: {
-    prefix: 'ticket',
-    deleteAfterClose: true
+    panelDescription:
+      'Sélectionne le type de ticket correspondant à ta demande.',
+
+    support: {
+      label: 'Ouvrir un ticket',
+      description:
+        'Besoin d’aide ou d’assistance ?',
+      emoji: '🎫',
+
+      categoryId: null,
+
+      /*
+       * Default viewer + ping role requested by the user.
+       */
+      viewRoleIds: [
+        '1548279987453296643'
+      ],
+
+      pingRoleIds: [
+        '1548279987453296643'
+      ]
+    },
+
+    giveawayClaim: {
+      label: 'Giveaways • Réclamation',
+      description:
+        'Réclamer un giveaway que tu viens de gagner.',
+      emoji: '🏆',
+
+      categoryId: null,
+
+      viewRoleIds: [
+        '1548279987453296643'
+      ],
+
+      pingRoleIds: [
+        '1548279987453296643'
+      ]
+    },
+
+    deleteAfterClose: true,
+    prefix: 'ticket'
   },
 
   sessions: {
@@ -241,13 +446,15 @@ const DEFAULT_CONFIG = {
   },
 
   giveaways: {
-    minimumDurationSeconds: 10
+    minimumDurationSeconds: 10,
+    claimHours: 24
   },
 
   security: {
     antiRaid: {
       joinThreshold: 8,
-      windowSeconds: 10
+      windowSeconds: 10,
+      timeoutNewMembers: true
     },
 
     antiSpam: {
@@ -264,7 +471,7 @@ const DEFAULT_CONFIG = {
     },
 
     badWords: {
-      timeoutAtStrike: true
+      enabled: true
     }
   },
 
@@ -284,17 +491,23 @@ const DEFAULT_CONFIG = {
 };
 
 // ============================================================================
-// CONFIG HELPERS
+// CONFIG STORAGE
 // ============================================================================
 
 function clone(value) {
-  return JSON.parse(JSON.stringify(value));
+  return JSON.parse(
+    JSON.stringify(value)
+  );
 }
 
 function merge(base, extra) {
   const output = clone(base);
 
-  for (const [key, value] of Object.entries(extra || {})) {
+  for (
+    const [key, value] of Object.entries(
+      extra || {}
+    )
+  ) {
     if (
       value &&
       typeof value === 'object' &&
@@ -303,7 +516,11 @@ function merge(base, extra) {
       typeof output[key] === 'object' &&
       !Array.isArray(output[key])
     ) {
-      output[key] = merge(output[key], value);
+      output[key] =
+        merge(
+          output[key],
+          value
+        );
     } else {
       output[key] = value;
     }
@@ -314,14 +531,22 @@ function merge(base, extra) {
 
 function getConfig(guildId) {
   const row = db
-    .prepare('SELECT data FROM configs WHERE guild_id = ?')
+    .prepare(`
+      SELECT data
+      FROM configs
+      WHERE guild_id = ?
+    `)
     .get(guildId);
 
   if (!row) {
-    const config = clone(DEFAULT_CONFIG);
+    const config =
+      clone(DEFAULT_CONFIG);
 
     db.prepare(`
-      INSERT INTO configs (guild_id, data)
+      INSERT INTO configs (
+        guild_id,
+        data
+      )
       VALUES (?, ?)
     `).run(
       guildId,
@@ -337,41 +562,70 @@ function getConfig(guildId) {
       JSON.parse(row.data)
     );
   } catch {
-    return clone(DEFAULT_CONFIG);
+    return clone(
+      DEFAULT_CONFIG
+    );
   }
 }
 
-function saveConfig(guildId, config) {
+function saveConfig(
+  guildId,
+  config
+) {
   db.prepare(`
-    INSERT INTO configs (guild_id, data)
+    INSERT INTO configs (
+      guild_id,
+      data
+    )
     VALUES (?, ?)
     ON CONFLICT(guild_id)
-    DO UPDATE SET data = excluded.data
+    DO UPDATE SET
+      data = excluded.data
   `).run(
     guildId,
     JSON.stringify(config)
   );
 }
 
-function getNested(object, path) {
+function getNested(
+  object,
+  path
+) {
   return path
     .split('.')
-    .reduce((acc, key) => acc?.[key], object);
+    .reduce(
+      (acc, key) => acc?.[key],
+      object
+    );
 }
 
-function setNested(object, path, value) {
-  const parts = path.split('.');
-  let current = object;
+function setNested(
+  object,
+  path,
+  value
+) {
+  const parts =
+    path.split('.');
 
-  for (let i = 0; i < parts.length - 1; i++) {
+  let current =
+    object;
+
+  for (
+    let i = 0;
+    i < parts.length - 1;
+    i++
+  ) {
     if (!current[parts[i]]) {
       current[parts[i]] = {};
     }
 
-    current = current[parts[i]];
+    current =
+      current[parts[i]];
   }
 
-  current[parts[parts.length - 1]] = value;
+  current[
+    parts[parts.length - 1]
+  ] = value;
 }
 
 // ============================================================================
@@ -387,20 +641,21 @@ const client = new Client({
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.GuildModeration
   ],
+
   partials: [
     Partials.Channel
   ]
 });
 
 // ============================================================================
-// MEMORY
+// RUNTIME
 // ============================================================================
 
 const spamTracker = new Map();
 const raidTracker = new Map();
 
 // ============================================================================
-// BAD WORDS
+// BAD WORD LIST
 // ============================================================================
 
 const DEFAULT_BAD_WORDS = new Set([
@@ -482,8 +737,8 @@ const DEFAULT_BAD_WORDS = new Set([
   // Turkish
   'siktir',
   'orospu',
-  'pic',
   'piç',
+  'pic',
 
   // Russian
   'блять',
@@ -547,7 +802,7 @@ const DEFAULT_BAD_WORDS = new Set([
   'fasz',
   'geci',
 
-  // Hindi/Hinglish
+  // Hindi / Hinglish
   'madarchod',
   'bhenchod',
   'chutiya',
@@ -586,7 +841,7 @@ const DEFAULT_BAD_WORDS = new Set([
   'ばか',
   'バカ',
 
-  // Arabic
+  // Arabic common profanity
   'كلب',
   'حمار',
   'خرا',
@@ -605,37 +860,54 @@ function normalizeText(text) {
     .replace(/0/g, 'o')
     .replace(/[$5]/g, 's')
     .replace(/7/g, 't')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(
+      /[^\p{L}\p{N}\s]/gu,
+      ' '
+    )
+    .replace(
+      /\s+/g,
+      ' '
+    )
     .trim();
 }
 
-function findBadWord(content, config) {
-  const normalized = normalizeText(content);
+function findBadWord(
+  content,
+  config
+) {
+  const normalized =
+    normalizeText(
+      content
+    );
 
-  const words = new Set(
-    normalized
-      .split(/\s+/)
-      .filter(Boolean)
-  );
+  const words =
+    new Set(
+      normalized
+        .split(/\s+/)
+        .filter(Boolean)
+    );
 
-  for (const badWord of DEFAULT_BAD_WORDS) {
+  for (
+    const word of DEFAULT_BAD_WORDS
+  ) {
     if (
       words.has(
-        normalizeText(badWord)
+        normalizeText(word)
       )
     ) {
-      return badWord;
+      return word;
     }
   }
 
-  for (const badWord of config.customBadWords) {
+  for (
+    const word of config.customBadWords
+  ) {
     if (
       words.has(
-        normalizeText(badWord)
+        normalizeText(word)
       )
     ) {
-      return badWord;
+      return word;
     }
   }
 
@@ -643,9 +915,20 @@ function findBadWord(content, config) {
 }
 
 // ============================================================================
-// SANCTION ESCALATION
+// SANCTIONS
 // ============================================================================
 
+/*
+30 seconds
+1 minute
+5 minutes
+10 minutes
+30 minutes
+1 hour
+6 hours
+12 hours
+24 hours
+*/
 const SANCTION_STEPS = [
   30,
   60,
@@ -658,8 +941,9 @@ const SANCTION_STEPS = [
   86400
 ];
 
-function getCurrentDayKey() {
-  const now = new Date();
+function currentDayKey() {
+  const now =
+    new Date();
 
   return [
     now.getFullYear(),
@@ -668,15 +952,17 @@ function getCurrentDayKey() {
   ].join('-');
 }
 
-function getUserStrike(guildId, userId) {
-  const row = db
-    .prepare(`
+function getStrikeCount(
+  guildId,
+  userId
+) {
+  const row =
+    db.prepare(`
       SELECT *
       FROM user_sanctions
       WHERE guild_id = ?
         AND user_id = ?
-    `)
-    .get(
+    `).get(
       guildId,
       userId
     );
@@ -685,18 +971,26 @@ function getUserStrike(guildId, userId) {
     return 0;
   }
 
-  const lastStrikeDay =
-    row.last_strike_at
-      ? new Date(row.last_strike_at)
-      : null;
+  if (
+    !row.last_strike_at
+  ) {
+    return row.strikes;
+  }
+
+  const date =
+    new Date(
+      row.last_strike_at
+    );
+
+  const storedDay = [
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate()
+  ].join('-');
 
   if (
-    lastStrikeDay &&
-    [
-      lastStrikeDay.getFullYear(),
-      lastStrikeDay.getMonth(),
-      lastStrikeDay.getDate()
-    ].join('-') !== getCurrentDayKey()
+    storedDay !==
+    currentDayKey()
   ) {
     return 0;
   }
@@ -704,9 +998,12 @@ function getUserStrike(guildId, userId) {
   return row.strikes;
 }
 
-function addStrike(guildId, userId) {
+function addStrike(
+  guildId,
+  userId
+) {
   const current =
-    getUserStrike(
+    getStrikeCount(
       guildId,
       userId
     );
@@ -725,7 +1022,10 @@ function addStrike(guildId, userId) {
       last_strike_at
     )
     VALUES (?, ?, ?, ?)
-    ON CONFLICT(guild_id, user_id)
+    ON CONFLICT(
+      guild_id,
+      user_id
+    )
     DO UPDATE SET
       strikes = excluded.strikes,
       last_strike_at = excluded.last_strike_at
@@ -739,33 +1039,47 @@ function addStrike(guildId, userId) {
   return next;
 }
 
-function getTimeoutSeconds(strike) {
+function timeoutSecondsForStrike(
+  strike
+) {
   return SANCTION_STEPS[
-    Math.max(
-      0,
-      Math.min(
+    Math.min(
+      Math.max(
         strike - 1,
-        SANCTION_STEPS.length - 1
-      )
+        0
+      ),
+      SANCTION_STEPS.length - 1
     )
   ];
 }
 
-function formatDuration(seconds) {
-  if (seconds < 60) {
+function formatDuration(
+  seconds
+) {
+  if (
+    seconds < 60
+  ) {
     return `${seconds} seconde${seconds > 1 ? 's' : ''}`;
   }
 
-  if (seconds < 3600) {
+  if (
+    seconds < 3600
+  ) {
     const minutes =
-      Math.floor(seconds / 60);
+      Math.floor(
+        seconds / 60
+      );
 
     return `${minutes} minute${minutes > 1 ? 's' : ''}`;
   }
 
-  if (seconds < 86400) {
+  if (
+    seconds < 86400
+  ) {
     const hours =
-      Math.floor(seconds / 3600);
+      Math.floor(
+        seconds / 3600
+      );
 
     return `${hours} heure${hours > 1 ? 's' : ''}`;
   }
@@ -773,8 +1087,68 @@ function formatDuration(seconds) {
   return '24 heures';
 }
 
+async function applyProgressiveTimeout(
+  member,
+  reason
+) {
+  if (
+    !member ||
+    !member.moderatable
+  ) {
+    return null;
+  }
+
+  const strike =
+    addStrike(
+      member.guild.id,
+      member.id
+    );
+
+  const seconds =
+    timeoutSecondsForStrike(
+      strike
+    );
+
+  try {
+    await member.timeout(
+      seconds * 1000,
+      reason
+    );
+  } catch {
+    return null;
+  }
+
+  try {
+    await member.user.send(
+      v2Message(
+        container({
+          title:
+            'Sanction automatique',
+          description:
+            `Ton message a été supprimé automatiquement.\n\n` +
+            `**Raison :** ${reason}\n\n` +
+            `**Sanction :** timeout de ${formatDuration(seconds)}\n` +
+            `**Niveau :** ${strike}\n\n` +
+            `Les sanctions augmentent progressivement et le compteur est réinitialisé à la fin de la journée.`,
+          accent:
+            0xED4245,
+          footer:
+            'Bretagne RP • Modération automatique'
+        })
+      )
+    );
+  } catch {
+    // DM fermé.
+  }
+
+  return {
+    strike,
+    seconds
+  };
+}
+
 // ============================================================================
-// COMPONENTS V2 HELPERS
+// V2 BUILDERS
 // ============================================================================
 
 function container({
@@ -782,29 +1156,35 @@ function container({
   description,
   accent = 0x5865F2,
   footer = null,
-  components = []
+  rows = []
 }) {
   const result =
     new ContainerBuilder()
-      .setAccentColor(accent)
+      .setAccentColor(
+        accent
+      )
       .addTextDisplayComponents(
         new TextDisplayBuilder()
-          .setContent(`# ${title}`)
+          .setContent(
+            `# ${title}`
+          )
       )
       .addSeparatorComponents(
         new SeparatorBuilder()
       )
       .addTextDisplayComponents(
         new TextDisplayBuilder()
-          .setContent(description)
+          .setContent(
+            description
+          )
       );
 
-  for (const component of components) {
-    if (component.type === 'row') {
-      result.addActionRowComponents(
-        component.row
-      );
-    }
+  for (
+    const item of rows
+  ) {
+    result.addActionRowComponents(
+      item
+    );
   }
 
   if (footer) {
@@ -823,71 +1203,261 @@ function container({
   return result;
 }
 
-function row(...buttons) {
+function v2Message(
+  component
+) {
   return {
-    type: 'row',
-    row:
-      new ActionRowBuilder()
-        .addComponents(...buttons)
+    flags:
+      MessageFlags.IsComponentsV2,
+    components: [
+      component
+    ]
   };
 }
 
-function v2Message(component) {
-  return {
-    flags: MessageFlags.IsComponentsV2,
-    components: [component]
-  };
-}
-
-function v2Reply(interaction, component, ephemeral = false) {
+function v2Reply(
+  interaction,
+  component,
+  ephemeral = false
+) {
   let flags =
     MessageFlags.IsComponentsV2;
 
   if (ephemeral) {
-    flags |= MessageFlags.Ephemeral;
+    flags |=
+      MessageFlags.Ephemeral;
   }
 
   return interaction.reply({
     flags,
-    components: [component]
+    components: [
+      component
+    ]
+  });
+}
+
+function textReply(
+  interaction,
+  content,
+  ephemeral = true
+) {
+  return interaction.reply({
+    content,
+    ...(ephemeral
+      ? {
+          flags:
+            MessageFlags.Ephemeral
+        }
+      : {})
   });
 }
 
 // ============================================================================
-// CHANNEL HELPERS
+// PERMISSIONS
 // ============================================================================
 
-async function getTextChannel(guild, id) {
-  if (!id) {
+function isStaffMember(
+  member
+) {
+  if (!member) {
+    return false;
+  }
+
+  return (
+    member.permissions.has(
+      PermissionFlagsBits.Administrator
+    ) ||
+    member.permissions.has(
+      PermissionFlagsBits.ManageGuild
+    )
+  );
+}
+
+function roleRestrictionPasses(
+  member,
+  config,
+  roleId
+) {
+  if (
+    config.testMode
+  ) {
+    return true;
+  }
+
+  if (
+    isStaffMember(member)
+  ) {
+    return true;
+  }
+
+  if (
+    !roleId
+  ) {
+    return false;
+  }
+
+  return member.roles.cache.has(
+    roleId
+  );
+}
+
+function hasBypass(
+  member,
+  config,
+  system
+) {
+  if (
+    !member?.roles?.cache
+  ) {
+    return false;
+  }
+
+  const roles =
+    config.bypassRoles[
+      system
+    ] || [];
+
+  return roles.some(
+    roleId =>
+      member.roles.cache.has(
+        roleId
+      )
+  );
+}
+
+// ============================================================================
+// CHANNEL / ROLE HELPERS
+// ============================================================================
+
+async function getTextChannel(
+  guild,
+  channelId
+) {
+  if (!channelId) {
     return null;
   }
 
   let channel =
-    guild.channels.cache.get(id);
+    guild.channels.cache.get(
+      channelId
+    );
 
-  if (channel) {
-    return channel.isTextBased()
-      ? channel
-      : null;
+  if (
+    channel &&
+    channel.isTextBased()
+  ) {
+    return channel;
   }
 
   try {
     channel =
-      await guild.channels.fetch(id);
+      await guild.channels.fetch(
+        channelId
+      );
 
-    return channel?.isTextBased()
-      ? channel
-      : null;
+    if (
+      channel &&
+      channel.isTextBased()
+    ) {
+      return channel;
+    }
+  } catch {}
+
+  return null;
+}
+
+async function getRole(
+  guild,
+  roleId
+) {
+  if (!roleId) {
+    return null;
+  }
+
+  let role =
+    guild.roles.cache.get(
+      roleId
+    );
+
+  if (role) {
+    return role;
+  }
+
+  try {
+    role =
+      await guild.roles.fetch(
+        roleId
+      );
+
+    return role;
   } catch {
     return null;
   }
 }
 
+async function findFallbackChannel(
+  guild
+) {
+  const preferred = [
+    guild.systemChannel,
+    await getTextChannel(
+      guild,
+      getConfig(
+        guild.id
+      ).channels.welcome
+    ),
+    await getTextChannel(
+      guild,
+      getConfig(
+        guild.id
+      ).channels.suggestions
+    )
+  ];
+
+  for (
+    const channel of preferred
+  ) {
+    if (
+      channel?.isTextBased()
+    ) {
+      const me =
+        guild.members.me;
+
+      if (
+        me &&
+        channel
+          .permissionsFor(me)
+          ?.has(
+            PermissionFlagsBits.SendMessages
+          )
+      ) {
+        return channel;
+      }
+    }
+  }
+
+  return guild.channels.cache.find(
+    channel =>
+      channel.type ===
+        ChannelType.GuildText &&
+      channel
+        .permissionsFor(
+          guild.members.me
+        )
+        ?.has(
+          PermissionFlagsBits.SendMessages
+        )
+  ) || null;
+}
+
 // ============================================================================
-// PANEL DATABASE
+// PANEL STORAGE
 // ============================================================================
 
-function getPanel(guildId, panelKey) {
+function getStoredPanel(
+  guildId,
+  panelKey
+) {
   return db.prepare(`
     SELECT *
     FROM panel_messages
@@ -913,7 +1483,10 @@ function savePanel(
       message_id
     )
     VALUES (?, ?, ?, ?)
-    ON CONFLICT(guild_id, panel_key)
+    ON CONFLICT(
+      guild_id,
+      panel_key
+    )
     DO UPDATE SET
       channel_id = excluded.channel_id,
       message_id = excluded.message_id
@@ -926,23 +1499,26 @@ function savePanel(
 }
 
 // ============================================================================
-// PERSISTENT PANEL SYNC
+// AUTO PANEL ENGINE
 // ============================================================================
 
-async function syncPersistentPanel(
+async function syncPanel(
   guild,
-  panelKey,
+  key,
   channel,
   builder
 ) {
-  if (!channel?.isTextBased()) {
+  if (
+    !channel ||
+    !channel.isTextBased()
+  ) {
     return;
   }
 
   const stored =
-    getPanel(
+    getStoredPanel(
       guild.id,
-      panelKey
+      key
     );
 
   if (stored) {
@@ -953,45 +1529,49 @@ async function syncPersistentPanel(
           stored.channel_id
         );
 
-      if (oldChannel) {
+      if (
+        oldChannel
+      ) {
         const message =
           await oldChannel.messages.fetch(
             stored.message_id
           );
 
-        if (message) {
+        if (
+          message
+        ) {
           await message.edit(
-            v2Message(builder())
+            v2Message(
+              builder()
+            )
           );
 
-          if (
-            oldChannel.id !== channel.id
-          ) {
-            savePanel(
-              guild.id,
-              panelKey,
-              channel.id,
-              message.id
-            );
-          }
+          savePanel(
+            guild.id,
+            key,
+            oldChannel.id,
+            message.id
+          );
 
           return;
         }
       }
     } catch {
-      // Message vanished.
-      // Create it again below.
+      // Old panel gone.
+      // We recreate it below.
     }
   }
 
   const message =
     await channel.send(
-      v2Message(builder())
+      v2Message(
+        builder()
+      )
     );
 
   savePanel(
     guild.id,
-    panelKey,
+    key,
     channel.id,
     message.id
   );
@@ -1001,7 +1581,22 @@ async function syncPersistentPanel(
 // RULES
 // ============================================================================
 
-function buildRulesPanel(config) {
+function buildRulesPanel(
+  config
+) {
+  const accept =
+    new ButtonBuilder()
+      .setCustomId(
+        'rules_accept'
+      )
+      .setLabel(
+        'J’accepte le règlement'
+      )
+      .setEmoji('✅')
+      .setStyle(
+        ButtonStyle.Success
+      );
+
   const rulesText = [
     '## Règlement RP France',
     '',
@@ -1032,20 +1627,18 @@ function buildRulesPanel(config) {
     '**En cliquant sur le bouton ci-dessous, vous confirmez avoir lu et accepté le règlement.**'
   ].join('\n');
 
-  const acceptButton =
-    new ButtonBuilder()
-      .setCustomId('rules_accept')
-      .setLabel('J’accepte le règlement')
-      .setEmoji('✅')
-      .setStyle(ButtonStyle.Success);
-
   return container({
-    title: 'Règlement RP France',
-    description: rulesText,
+    title:
+      'Règlement RP France',
+    description:
+      rulesText,
     accent:
       config.appearance.successColor,
-    components: [
-      row(acceptButton)
+    rows: [
+      new ActionRowBuilder()
+        .addComponents(
+          accept
+        )
     ],
     footer:
       `${config.serverName} • Merci de respecter les règles`
@@ -1056,42 +1649,77 @@ function buildRulesPanel(config) {
 // APPLICATION PANEL
 // ============================================================================
 
-function buildApplicationPanel(config) {
+function buildApplicationPanel(
+  config
+) {
   const menu =
     new StringSelectMenuBuilder()
-      .setCustomId('application_menu')
+      .setCustomId(
+        'application_menu'
+      )
       .setPlaceholder(
-        'Sélectionnez une option...'
+        config.systems.applications
+          ? 'Sélectionnez une option...'
+          : 'Les candidatures sont fermées'
+      )
+      .setDisabled(
+        !config.systems.applications
       )
       .addOptions(
         new StringSelectMenuOptionBuilder()
-          .setLabel('Candidature Staff')
+          .setLabel(
+            'Candidature Staff'
+          )
           .setDescription(
-            'Commencer une candidature Staff'
+            config.systems.applications
+              ? 'Commencer une candidature Staff'
+              : 'Les candidatures sont actuellement fermées'
           )
           .setEmoji('📋')
           .setValue('staff')
       );
 
   return container({
-    title: 'Candidatures Staff',
+    title:
+      config.systems.applications
+        ? 'Candidatures Staff'
+        : 'Candidatures Staff • Fermées',
+
     description:
-      '## Rejoindre le Staff\n\n' +
-      'Tu souhaites rejoindre l’équipe de **Bretagne RP** ?\n\n' +
-      'Sélectionne **Candidature Staff** ci-dessous.\n\n' +
-      'La candidature se déroule directement en **messages privés** avec le bot. Les questions sont envoyées une par une et chaque réponse est enregistrée.',
+      config.systems.applications
+        ? [
+            '## Rejoindre le Staff',
+            '',
+            'Tu souhaites rejoindre **Bretagne RP** ?',
+            '',
+            'La candidature se déroule directement en **DM** avec le bot.',
+            '',
+            'Les questions arrivent une par une et chaque réponse est enregistrée automatiquement.',
+            '',
+            'Choisis **Candidature Staff** pour commencer.'
+          ].join('\n')
+        : [
+            '## Recrutement fermé',
+            '',
+            'Les candidatures Staff sont actuellement fermées.',
+            '',
+            'Le Staff pourra les rouvrir directement depuis `/config`.'
+          ].join('\n'),
+
     accent:
-      config.appearance.accentColor,
-    components: [
-      {
-        type: 'row',
-        row:
-          new ActionRowBuilder()
-            .addComponents(menu)
-      }
+      config.systems.applications
+        ? config.appearance.accentColor
+        : config.appearance.dangerColor,
+
+    rows: [
+      new ActionRowBuilder()
+        .addComponents(
+          menu
+        )
     ],
+
     footer:
-      'Bretagne RP • Les candidatures sont traitées par le Staff'
+      `${config.serverName} • Recrutement`
   });
 }
 
@@ -1099,158 +1727,290 @@ function buildApplicationPanel(config) {
 // TICKET PANEL
 // ============================================================================
 
-function buildTicketPanel(config) {
+function buildTicketPanel(
+  config
+) {
   const menu =
     new StringSelectMenuBuilder()
-      .setCustomId('ticket_menu')
+      .setCustomId(
+        'ticket_menu'
+      )
       .setPlaceholder(
-        'Sélectionnez une option...'
+        config.systems.tickets
+          ? 'Choisir le type de ticket...'
+          : 'Tickets désactivés'
+      )
+      .setDisabled(
+        !config.systems.tickets
       )
       .addOptions(
         new StringSelectMenuOptionBuilder()
-          .setLabel('Ouvrir un ticket')
-          .setDescription(
-            'Créer un ticket avec le support'
+          .setLabel(
+            config.tickets.support.label
           )
-          .setEmoji('🎫')
-          .setValue('open')
+          .setDescription(
+            config.tickets.support.description
+          )
+          .setEmoji(
+            config.tickets.support.emoji
+          )
+          .setValue(
+            'support'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            config.tickets
+              .giveawayClaim
+              .label
+          )
+          .setDescription(
+            config.tickets
+              .giveawayClaim
+              .description
+          )
+          .setEmoji(
+            config.tickets
+              .giveawayClaim
+              .emoji
+          )
+          .setValue(
+            'giveawayClaim'
+          )
       );
 
   return container({
-    title: 'Centre de support',
+    title:
+      config.systems.tickets
+        ? 'Centre de support'
+        : 'Centre de support • Fermé',
+
     description:
-      '## Besoin d’aide ?\n\n' +
-      'Utilise le menu ci-dessous pour ouvrir un ticket privé avec l’équipe de support.\n\n' +
-      'Décris ta demande clairement afin que le Staff puisse t’aider efficacement.',
+      config.systems.tickets
+        ? [
+            '## Ouvrir un ticket',
+            '',
+            config.tickets.panelDescription,
+            '',
+            '### 🎫 Support',
+            'Pour une demande générale, une question ou un problème.',
+            '',
+            '### 🏆 Giveaway • Réclamation',
+            'Uniquement pour les gagnants d’un giveaway actuellement en attente de réclamation.',
+            '',
+            'Les tickets sont privés et les rôles autorisés sont configurables.'
+          ].join('\n')
+        : [
+            '## Tickets temporairement fermés',
+            '',
+            'Le système de tickets est actuellement désactivé.'
+          ].join('\n'),
+
     accent:
-      config.appearance.accentColor,
-    components: [
-      {
-        type: 'row',
-        row:
-          new ActionRowBuilder()
-            .addComponents(menu)
-      }
+      config.systems.tickets
+        ? config.appearance.accentColor
+        : config.appearance.dangerColor,
+
+    rows: [
+      new ActionRowBuilder()
+        .addComponents(
+          menu
+        )
     ],
+
     footer:
-      'Bretagne RP • Support'
+      `${config.serverName} • Support`
   });
 }
 
 // ============================================================================
-// SUGGESTIONS PANEL
+// SUGGESTION PANEL
 // ============================================================================
 
-function buildSuggestionPanel(config) {
+function buildSuggestionPanel(
+  config
+) {
   const button =
     new ButtonBuilder()
-      .setCustomId('suggestion_create')
-      .setLabel('Créer une suggestion')
+      .setCustomId(
+        'suggestion_create'
+      )
+      .setLabel(
+        'Créer une suggestion'
+      )
       .setEmoji('💡')
-      .setStyle(ButtonStyle.Primary);
+      .setStyle(
+        ButtonStyle.Primary
+      );
 
   return container({
-    title: 'Suggestions',
+    title:
+      'Suggestions',
     description:
-      '## Une idée pour Bretagne RP ?\n\n' +
-      'Tu peux proposer une amélioration pour le serveur grâce au système de suggestions.\n\n' +
-      'Les membres pourront ensuite voter pour les propositions.',
+      [
+        '## Une idée pour Bretagne RP ?',
+        '',
+        'Les suggestions permettent de proposer des améliorations pour le serveur.',
+        '',
+        'Explique ton idée clairement. Les membres pourront ensuite voter.',
+        '',
+        config.systems.suggestions
+          ? 'Clique sur **Créer une suggestion** pour commencer.'
+          : 'Le système de suggestions est actuellement désactivé.'
+      ].join('\n'),
+
     accent:
-      config.appearance.warningColor,
-    components: [
-      row(button)
+      config.systems.suggestions
+        ? config.appearance.warningColor
+        : config.appearance.dangerColor,
+
+    rows: [
+      new ActionRowBuilder()
+        .addComponents(
+          button.setDisabled(
+            !config.systems.suggestions
+          )
+        )
     ],
+
     footer:
-      'Bretagne RP • Tes idées comptent'
+      `${config.serverName} • Tes idées comptent`
   });
 }
 
 // ============================================================================
-// AUTO PANELS
+// AUTO PANEL SYNC
 // ============================================================================
 
-async function syncAllPanels(guild) {
+async function syncAllPanels(
+  guild
+) {
   const config =
-    getConfig(guild.id);
+    getConfig(
+      guild.id
+    );
 
-  if (config.systems.rules) {
+  // Rules
+  if (
+    config.channels.rules
+  ) {
     const channel =
       await getTextChannel(
         guild,
         config.channels.rules
       );
 
-    if (channel) {
-      await syncPersistentPanel(
+    if (
+      channel
+    ) {
+      await syncPanel(
         guild,
         'rules',
         channel,
-        () => buildRulesPanel(config)
+        () =>
+          buildRulesPanel(
+            config
+          )
       );
     }
   }
 
-  if (config.systems.applications) {
+  // Applications
+  if (
+    config.channels.applicationLogs
+  ) {
     const channel =
       await getTextChannel(
         guild,
         config.channels.applicationLogs
       );
 
-    if (channel) {
-      await syncPersistentPanel(
+    if (
+      channel
+    ) {
+      await syncPanel(
         guild,
         'applications',
         channel,
-        () => buildApplicationPanel(config)
+        () =>
+          buildApplicationPanel(
+            config
+          )
       );
     }
   }
 
-  if (config.systems.tickets) {
-    let channel =
-      await getTextChannel(
-        guild,
-        config.channels.logs
+  // Ticket panel
+  let ticketPanelChannel =
+    await getTextChannel(
+      guild,
+      config.channels.ticketPanel
+    );
+
+  if (
+    !ticketPanelChannel
+  ) {
+    const stored =
+      getStoredPanel(
+        guild.id,
+        'tickets'
       );
 
-    if (!channel) {
-      channel =
-        guild.channels.cache.find(
-          c =>
-            c.type === ChannelType.GuildText &&
-            c.permissionsFor(
-              guild.members.me
-            )?.has(
-              PermissionFlagsBits.SendMessages
-            )
+    if (
+      stored
+    ) {
+      ticketPanelChannel =
+        await getTextChannel(
+          guild,
+          stored.channel_id
         );
     }
-
-    if (channel) {
-      await syncPersistentPanel(
-        guild,
-        'tickets',
-        channel,
-        () => buildTicketPanel(config)
-      );
-    }
   }
 
-  if (config.systems.suggestions) {
+  if (
+    !ticketPanelChannel
+  ) {
+    ticketPanelChannel =
+      await findFallbackChannel(
+        guild
+      );
+  }
+
+  if (
+    ticketPanelChannel
+  ) {
+    await syncPanel(
+      guild,
+      'tickets',
+      ticketPanelChannel,
+      () =>
+        buildTicketPanel(
+          config
+        )
+    );
+  }
+
+  // Suggestions panel
+  if (
+    config.channels.suggestions
+  ) {
     const channel =
       await getTextChannel(
         guild,
         config.channels.suggestions
       );
 
-    if (channel) {
-      await syncPersistentPanel(
+    if (
+      channel
+    ) {
+      await syncPanel(
         guild,
         'suggestions',
         channel,
         () =>
-          buildSuggestionPanel(config)
+          buildSuggestionPanel(
+            config
+          )
       );
     }
   }
@@ -1260,11 +2020,17 @@ async function syncAllPanels(guild) {
 // WELCOME
 // ============================================================================
 
-async function sendWelcome(member) {
+async function sendWelcome(
+  member
+) {
   const config =
-    getConfig(member.guild.id);
+    getConfig(
+      member.guild.id
+    );
 
-  if (!config.systems.welcome) {
+  if (
+    !config.systems.welcome
+  ) {
     return;
   }
 
@@ -1274,22 +2040,31 @@ async function sendWelcome(member) {
       config.channels.welcome
     );
 
-  if (channel) {
-    await channel.send(
-      v2Message(
-        container({
-          title:
-            config.welcome.title,
-          description:
-            `${member}\n\n` +
-            config.welcome.message,
-          accent:
-            config.appearance.accentColor,
-          footer:
-            `${config.serverName} • Nouveau membre`
-        })
-      )
-    );
+  if (
+    channel
+  ) {
+    try {
+      await channel.send(
+        v2Message(
+          container({
+            title:
+              config.welcome.title,
+            description:
+              [
+                `${member}`,
+                '',
+                config.welcome.message,
+                '',
+                'Bienvenue dans la communauté.'
+              ].join('\n'),
+            accent:
+              config.appearance.accentColor,
+            footer:
+              `${config.serverName} • Nouveau membre`
+          })
+        )
+      );
+    } catch {}
   }
 
   try {
@@ -1305,113 +2080,30 @@ async function sendWelcome(member) {
         })
       )
     );
-  } catch {
-    // DMs disabled.
-  }
+  } catch {}
 }
 
 // ============================================================================
-// BYPASS
+// APPLICATION SYSTEM
 // ============================================================================
 
-function hasBypass(
-  member,
-  config,
-  system
+async function startApplication(
+  user,
+  guildId
 ) {
-  const bypass =
-    config.bypassRoles[system] || [];
-
-  if (!member?.roles?.cache) {
-    return false;
-  }
-
-  return bypass.some(
-    roleId =>
-      member.roles.cache.has(roleId)
-  );
-}
-
-// ============================================================================
-// SANCTION DM
-// ============================================================================
-
-async function sendSanctionDM(
-  member,
-  reason,
-  strike,
-  seconds
-) {
-  try {
-    await member.user.send(
-      v2Message(
-        container({
-          title: 'Sanction automatique',
-          description:
-            `Ton message a été supprimé automatiquement.\n\n` +
-            `**Raison :** ${reason}\n\n` +
-            `**Sanction :** timeout de ${formatDuration(seconds)}\n` +
-            `**Niveau de sanction :** ${strike}\n\n` +
-            `Les sanctions augmentent progressivement et sont réinitialisées à la fin de la journée.`,
-          accent: 0xED4245,
-          footer:
-            'Bretagne RP • Modération automatique'
-        })
-      )
-    );
-  } catch {
-    // DMs disabled.
-  }
-}
-
-// ============================================================================
-// APPLY TIMEOUT
-// ============================================================================
-
-async function applyProgressiveTimeout(
-  member,
-  reason
-) {
-  if (!member?.moderatable) {
-    return null;
-  }
-
-  const strike =
-    addStrike(
-      member.guild.id,
-      member.id
+  const config =
+    getConfig(
+      guildId
     );
 
-  const seconds =
-    getTimeoutSeconds(strike);
-
-  try {
-    await member.timeout(
-      seconds * 1000,
-      reason
+  if (
+    !config.systems.applications
+  ) {
+    throw new Error(
+      'APPLICATIONS_CLOSED'
     );
-  } catch {
-    return null;
   }
 
-  await sendSanctionDM(
-    member,
-    reason,
-    strike,
-    seconds
-  );
-
-  return {
-    strike,
-    seconds
-  };
-}
-
-// ============================================================================
-// APPLICATION DM START
-// ============================================================================
-
-async function startApplication(user, guildId) {
   const existing =
     db.prepare(`
       SELECT *
@@ -1425,15 +2117,19 @@ async function startApplication(user, guildId) {
       user.id
     );
 
-  if (existing) {
+  if (
+    existing
+  ) {
     await user.send(
       v2Message(
         container({
-          title: 'Candidature déjà en cours',
+          title:
+            'Candidature déjà en cours',
           description:
             'Tu as déjà une candidature en cours.\n\n' +
             'Termine celle-ci avant d’en commencer une nouvelle.',
-          accent: 0xFEE75C
+          accent:
+            config.appearance.warningColor
         })
       )
     );
@@ -1464,22 +2160,36 @@ async function startApplication(user, guildId) {
       .setCustomId(
         `application_start:${result.lastInsertRowid}`
       )
-      .setLabel('Commencer')
+      .setLabel(
+        'Commencer'
+      )
       .setEmoji('▶️')
-      .setStyle(ButtonStyle.Primary);
+      .setStyle(
+        ButtonStyle.Primary
+      );
 
   await user.send(
     v2Message(
       container({
-        title: 'Candidature Staff',
+        title:
+          'Candidature Staff',
         description:
-          'Bienvenue dans le système de candidature de **Bretagne RP**.\n\n' +
-          'Le bot va te poser plusieurs questions, une par une.\n\n' +
-          'Réponds honnêtement et clairement.\n\n' +
-          'Clique sur **Commencer** lorsque tu es prêt.',
-        accent: 0x5865F2,
-        components: [
-          row(start)
+          [
+            'Bienvenue dans le système de candidature de **Bretagne RP**.',
+            '',
+            'Le bot va te poser plusieurs questions, une par une.',
+            '',
+            'Réponds directement à chaque question.',
+            '',
+            'Lorsque tu es prêt, clique sur **Commencer**.'
+          ].join('\n'),
+        accent:
+          config.appearance.accentColor,
+        rows: [
+          new ActionRowBuilder()
+            .addComponents(
+              start
+            )
         ],
         footer:
           `Candidature #${result.lastInsertRowid}`
@@ -1488,15 +2198,13 @@ async function startApplication(user, guildId) {
   );
 }
 
-// ============================================================================
-// ASK APPLICATION QUESTION
-// ============================================================================
-
-async function askNextApplicationQuestion(
+async function askApplicationQuestion(
   application
 ) {
   const config =
-    getConfig(application.guild_id);
+    getConfig(
+      application.guild_id
+    );
 
   const questions =
     config.applications.questions;
@@ -1524,32 +2232,36 @@ async function askNextApplicationQuestion(
         title:
           `Question ${application.question_index + 1}/${questions.length}`,
         description:
-          question +
-          '\n\n' +
-          'Réponds directement à ce message.',
+          [
+            question,
+            '',
+            'Réponds directement dans ce DM.'
+          ].join('\n'),
         accent:
-          config.appearance.accentColor
+          config.appearance.accentColor,
+        footer:
+          'Une réponse à la fois • Bretagne RP'
       })
     )
   );
 }
 
-// ============================================================================
-// FINALIZE APPLICATION
-// ============================================================================
-
 async function finalizeApplication(
   application
 ) {
   const config =
-    getConfig(application.guild_id);
+    getConfig(
+      application.guild_id
+    );
 
   const guild =
     client.guilds.cache.get(
       application.guild_id
     );
 
-  if (!guild) {
+  if (
+    !guild
+  ) {
     return;
   }
 
@@ -1559,13 +2271,15 @@ async function finalizeApplication(
       config.channels.applicationLogs
     );
 
-  if (!channel) {
+  if (
+    !channel
+  ) {
     return;
   }
 
   const answers =
     JSON.parse(
-      application.answers
+      application.answers || '[]'
     );
 
   const questions =
@@ -1584,18 +2298,26 @@ async function finalizeApplication(
       .setCustomId(
         `application_accept:${application.id}`
       )
-      .setLabel('Accepter')
+      .setLabel(
+        'Accepter'
+      )
       .setEmoji('✅')
-      .setStyle(ButtonStyle.Success);
+      .setStyle(
+        ButtonStyle.Success
+      );
 
   const refuse =
     new ButtonBuilder()
       .setCustomId(
         `application_refuse:${application.id}`
       )
-      .setLabel('Refuser')
+      .setLabel(
+        'Refuser'
+      )
       .setEmoji('❌')
-      .setStyle(ButtonStyle.Danger);
+      .setStyle(
+        ButtonStyle.Danger
+      );
 
   const message =
     await channel.send(
@@ -1604,19 +2326,23 @@ async function finalizeApplication(
           title:
             `Candidature Staff #${application.id}`,
           description:
-            `**Candidat :** <@${application.user_id}>\n` +
-            `**Date :** <t:${Math.floor(application.created_at / 1000)}:F>\n\n` +
-            formatted,
+            [
+              `**Candidat :** <@${application.user_id}>`,
+              `**Créée :** <t:${Math.floor(application.created_at / 1000)}:F>`,
+              '',
+              formatted
+            ].join('\n'),
           accent:
             config.appearance.accentColor,
-          components: [
-            row(
-              accept,
-              refuse
-            )
+          rows: [
+            new ActionRowBuilder()
+              .addComponents(
+                accept,
+                refuse
+              )
           ],
           footer:
-            'Utilisez les boutons pour traiter cette candidature.'
+            'Utilisez les boutons pour prendre une décision.'
         })
       )
     );
@@ -1646,8 +2372,13 @@ async function finalizeApplication(
           title:
             'Candidature envoyée',
           description:
-            'Ta candidature a été envoyée au Staff.\n\n' +
-            'Tu recevras un message privé lorsque la décision aura été prise.',
+            [
+              'Merci !',
+              '',
+              'Ta candidature a été envoyée au Staff.',
+              '',
+              'Tu recevras un message privé lorsque la décision aura été prise.'
+            ].join('\n'),
           accent:
             config.appearance.accentColor
         })
@@ -1657,17 +2388,126 @@ async function finalizeApplication(
 }
 
 // ============================================================================
-// TICKET CREATION
+// TICKET TYPE HELPERS
+// ============================================================================
+
+function ticketTypeConfig(
+  config,
+  type
+) {
+  if (
+    type === 'giveawayClaim'
+  ) {
+    return config.tickets.giveawayClaim;
+  }
+
+  return config.tickets.support;
+}
+
+function ticketTypeName(
+  type
+) {
+  return type === 'giveawayClaim'
+    ? 'Giveaway • Réclamation'
+    : 'Support';
+}
+
+function ticketPingMentions(
+  type,
+  config
+) {
+  const ticket =
+    ticketTypeConfig(
+      config,
+      type
+    );
+
+  return ticket
+    .pingRoleIds
+    .map(
+      roleId =>
+        `<@&${roleId}>`
+    )
+    .join(' ');
+}
+
+// ============================================================================
+// GIVEAWAY CLAIM CHECK
+// ============================================================================
+
+function getActiveClaimForUser(
+  guildId,
+  userId
+) {
+  return db.prepare(`
+    SELECT *
+    FROM giveaways
+    WHERE guild_id = ?
+      AND status = 'awaiting_claim'
+      AND current_winner_id = ?
+      AND claim_deadline > ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(
+    guildId,
+    userId,
+    Date.now()
+  );
+}
+
+// ============================================================================
+// CREATE TICKET
 // ============================================================================
 
 async function createTicket(
-  interaction
+  interaction,
+  type
 ) {
   const guild =
     interaction.guild;
 
   const config =
-    getConfig(guild.id);
+    getConfig(
+      guild.id
+    );
+
+  if (
+    !config.systems.tickets
+  ) {
+    return textReply(
+      interaction,
+      '❌ Le système de tickets est actuellement désactivé.'
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // Giveaway claim validation
+  // --------------------------------------------------------------------------
+
+  let giveaway = null;
+
+  if (
+    type === 'giveawayClaim'
+  ) {
+    giveaway =
+      getActiveClaimForUser(
+        guild.id,
+        interaction.user.id
+      );
+
+    if (
+      !giveaway
+    ) {
+      return textReply(
+        interaction,
+        '❌ Tu n’as actuellement aucun giveaway à réclamer. Cette option est uniquement disponible pour le gagnant pendant sa période de 24 heures.'
+      );
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // One open ticket of same/general type
+  // --------------------------------------------------------------------------
 
   const existing =
     db.prepare(`
@@ -1675,48 +2515,81 @@ async function createTicket(
       FROM tickets
       WHERE guild_id = ?
         AND user_id = ?
+        AND type = ?
         AND closed_at IS NULL
+      ORDER BY id DESC
+      LIMIT 1
     `).get(
       guild.id,
-      interaction.user.id
+      interaction.user.id,
+      type
     );
 
-  if (existing) {
-    return interaction.reply({
-      content:
-        `❌ Tu as déjà un ticket : <#${existing.channel_id}>`,
-      flags:
-        MessageFlags.Ephemeral
-    });
+  if (
+    existing
+  ) {
+    return textReply(
+      interaction,
+      `❌ Tu as déjà un ticket ${ticketTypeName(type)} ouvert : <#${existing.channel_id}>`
+    );
+  }
+
+  const ticketConfig =
+    ticketTypeConfig(
+      config,
+      type
+    );
+
+  let categoryId =
+    ticketConfig.categoryId;
+
+  if (
+    type === 'support' &&
+    config.channels.ticketCategorySupport
+  ) {
+    categoryId =
+      config.channels.ticketCategorySupport;
+  }
+
+  if (
+    type === 'giveawayClaim' &&
+    config.channels.ticketCategoryGiveawayClaim
+  ) {
+    categoryId =
+      config.channels.ticketCategoryGiveawayClaim;
   }
 
   let parent = null;
 
   if (
-    config.channels.ticketCategory
+    categoryId
   ) {
     const candidate =
       guild.channels.cache.get(
-        config.channels.ticketCategory
+        categoryId
       );
 
     if (
       candidate?.type ===
       ChannelType.GuildCategory
     ) {
-      parent = candidate;
+      parent =
+        candidate;
     }
   }
 
-  const permissionOverwrites = [
+  const overwrites = [
     {
-      id: guild.roles.everyone.id,
+      id:
+        guild.roles.everyone.id,
       deny: [
         PermissionFlagsBits.ViewChannel
       ]
     },
+
     {
-      id: interaction.user.id,
+      id:
+        interaction.user.id,
       allow: [
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.SendMessages,
@@ -1726,25 +2599,43 @@ async function createTicket(
     }
   ];
 
-  if (config.roles.ticketSupport) {
-    permissionOverwrites.push({
-      id: config.roles.ticketSupport,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.AttachFiles
-      ]
-    });
+  /*
+   * Viewer roles.
+   */
+  for (
+    const roleId of
+    ticketConfig.viewRoleIds
+  ) {
+    if (
+      guild.roles.cache.has(
+        roleId
+      )
+    ) {
+      overwrites.push({
+        id: roleId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.AttachFiles
+        ]
+      });
+    }
   }
 
   const channel =
     await guild.channels.create({
       name:
-        `${config.tickets.prefix}-${interaction.user.username}`
+        `${config.tickets.prefix}-${type === 'giveawayClaim' ? 'claim' : 'support'}-${interaction.user.username}`
           .toLowerCase()
-          .replace(/[^a-z0-9-]/g, '-')
-          .slice(0, 90),
+          .replace(
+            /[^a-z0-9-]/g,
+            '-'
+          )
+          .slice(
+            0,
+            90
+          ),
 
       type:
         ChannelType.GuildText,
@@ -1752,7 +2643,8 @@ async function createTicket(
       parent:
         parent?.id,
 
-      permissionOverwrites
+      permissionOverwrites:
+        overwrites
     });
 
   db.prepare(`
@@ -1760,189 +2652,588 @@ async function createTicket(
       guild_id,
       channel_id,
       user_id,
+      type,
+      giveaway_id,
       opened_at
     )
-    VALUES (?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?)
   `).run(
     guild.id,
     channel.id,
     interaction.user.id,
+    type,
+    giveaway?.id || null,
     Date.now()
   );
 
+  // --------------------------------------------------------------------------
+  // Stop giveaway timer immediately
+  // --------------------------------------------------------------------------
+
+  if (
+    giveaway
+  ) {
+    db.prepare(`
+      UPDATE giveaways
+      SET
+        status = 'claimed',
+        claim_deadline = NULL,
+        claim_ticket_channel_id = ?,
+        claimed_at = ?
+      WHERE id = ?
+    `).run(
+      channel.id,
+      Date.now(),
+      giveaway.id
+    );
+  }
+
   const close =
     new ButtonBuilder()
-      .setCustomId('ticket_close')
-      .setLabel('Fermer le ticket')
+      .setCustomId(
+        'ticket_close'
+      )
+      .setLabel(
+        'Fermer le ticket'
+      )
       .setEmoji('🔒')
-      .setStyle(ButtonStyle.Danger);
+      .setStyle(
+        ButtonStyle.Danger
+      );
+
+  const pingText =
+    ticketPingMentions(
+      type,
+      config
+    );
+
+  const ticketDescription =
+    type === 'giveawayClaim'
+      ? [
+          '## Réclamation Giveaway',
+          '',
+          `${interaction.user}, ton ticket de réclamation est ouvert.`,
+          '',
+          `**Giveaway :** #${giveaway.id}`,
+          `**Récompense :** ${giveaway.prize}`,
+          '',
+          'Le délai de 24 heures est maintenant **arrêté**.',
+          '',
+          'Le Staff peut maintenant vérifier et traiter ta réclamation.',
+          '',
+          pingText
+        ].join('\n')
+      : [
+          '## Support',
+          '',
+          `${interaction.user}, ton ticket est maintenant ouvert.`,
+          '',
+          'Explique clairement ta demande afin que le Staff puisse t’aider.',
+          '',
+          pingText
+        ].join('\n');
 
   await channel.send(
     v2Message(
       container({
-        title: 'Ticket ouvert',
+        title:
+          type === 'giveawayClaim'
+            ? 'Réclamation Giveaway'
+            : 'Ticket Support',
+
         description:
-          `${interaction.user}\n\n` +
-          'Ton ticket est maintenant ouvert.\n\n' +
-          'Explique ta demande clairement afin que le Staff puisse t’aider.',
+          ticketDescription,
+
         accent:
-          config.appearance.accentColor,
-        components: [
-          row(close)
+          type === 'giveawayClaim'
+            ? config.appearance.warningColor
+            : config.appearance.accentColor,
+
+        rows: [
+          new ActionRowBuilder()
+            .addComponents(
+              close
+            )
         ],
+
         footer:
-          'Bretagne RP • Support'
+          `${config.serverName} • ${ticketTypeName(type)}`
       })
     )
   );
 
-  return interaction.reply({
-    content:
-      `✅ Ticket créé : <#${channel.id}>`,
-    flags:
-      MessageFlags.Ephemeral
-  });
+  /*
+   * If this was a giveaway claim, update the original winner announcement.
+   */
+  if (
+    giveaway?.announcement_message_id
+  ) {
+    try {
+      const giveawayChannel =
+        await getTextChannel(
+          guild,
+          giveaway.channel_id
+        );
+
+      if (
+        giveawayChannel
+      ) {
+        const announcement =
+          await giveawayChannel.messages.fetch(
+            giveaway.announcement_message_id
+          );
+
+        await announcement.edit({
+          content:
+            `✅ **RÉCLAMATION OUVERTE** — <@${interaction.user.id}> a ouvert son ticket pour le giveaway **#${giveaway.id}**. Le compte à rebours de 24 heures est maintenant **arrêté**.\n\n` +
+            `🎁 **Récompense :** ${giveaway.prize}\n` +
+            `🎫 **Ticket :** <#${channel.id}>`
+        });
+      }
+    } catch {}
+  }
+
+  return textReply(
+    interaction,
+    `✅ Ton ticket a été créé : <#${channel.id}>`
+  );
 }
 
 // ============================================================================
-// GIVEAWAY
+// CLOSE TICKET
 // ============================================================================
 
-function parseDuration(input) {
-  const text =
-    String(input)
-      .toLowerCase()
-      .replace(/\s+/g, '');
+async function closeTicket(
+  interaction
+) {
+  const ticket =
+    db.prepare(`
+      SELECT *
+      FROM tickets
+      WHERE channel_id = ?
+        AND closed_at IS NULL
+    `).get(
+      interaction.channel.id
+    );
 
-  const regex =
-    /(\d+)(s|m|h|d|w)/g;
-
-  let total = 0;
-  let found = false;
-
-  let match;
-
-  while (
-    (match = regex.exec(text))
+  if (
+    !ticket
   ) {
-    found = true;
-
-    const amount =
-      Number(match[1]);
-
-    switch (match[2]) {
-      case 's':
-        total += amount * 1000;
-        break;
-
-      case 'm':
-        total += amount * 60 * 1000;
-        break;
-
-      case 'h':
-        total += amount * 60 * 60 * 1000;
-        break;
-
-      case 'd':
-        total += amount * 24 * 60 * 60 * 1000;
-        break;
-
-      case 'w':
-        total += amount * 7 * 24 * 60 * 60 * 1000;
-        break;
-    }
+    return textReply(
+      interaction,
+      '❌ Ce salon n’est pas un ticket actif.'
+    );
   }
 
-  return found
-    ? total
-    : null;
+  const config =
+    getConfig(
+      interaction.guild.id
+    );
+
+  const isOwner =
+    ticket.user_id ===
+    interaction.user.id;
+
+  const isViewer =
+    ticketTypeConfig(
+      config,
+      ticket.type
+    ).viewRoleIds
+      .some(
+        roleId =>
+          interaction.member.roles.cache.has(
+            roleId
+          )
+      );
+
+  const canManage =
+    interaction.member.permissions.has(
+      PermissionFlagsBits.ManageChannels
+    );
+
+  if (
+    !isOwner &&
+    !isViewer &&
+    !canManage
+  ) {
+    return textReply(
+      interaction,
+      '❌ Tu n’as pas la permission de fermer ce ticket.'
+    );
+  }
+
+  db.prepare(`
+    UPDATE tickets
+    SET closed_at = ?
+    WHERE channel_id = ?
+  `).run(
+    Date.now(),
+    interaction.channel.id
+  );
+
+  await textReply(
+    interaction,
+    '🔒 Ticket fermé.'
+  );
+
+  if (
+    config.tickets.deleteAfterClose
+  ) {
+    setTimeout(
+      () =>
+        interaction.channel
+          .delete(
+            'Ticket fermé'
+          )
+          .catch(() => {}),
+      1200
+    );
+  }
+}
+
+// ============================================================================
+// GIVEAWAY BUILDERS
+// ============================================================================
+
+function getGiveawayParticipants(
+  giveaway
+) {
+  try {
+    return JSON.parse(
+      giveaway.participants || '[]'
+    );
+  } catch {
+    return [];
+  }
+}
+
+function getExpiredWinners(
+  giveaway
+) {
+  try {
+    return JSON.parse(
+      giveaway.expired_winners || '[]'
+    );
+  } catch {
+    return [];
+  }
 }
 
 function buildGiveawayPanel(
-  giveaway
+  giveaway,
+  config
 ) {
   const participants =
-    JSON.parse(
-      giveaway.participants
+    getGiveawayParticipants(
+      giveaway
     );
+
+  const finished =
+    giveaway.status !== 'active';
 
   const participate =
     new ButtonBuilder()
       .setCustomId(
         `giveaway_join:${giveaway.id}`
       )
-      .setLabel('Participer')
+      .setLabel(
+        'Participer'
+      )
       .setEmoji('🎉')
-      .setStyle(ButtonStyle.Primary);
+      .setStyle(
+        ButtonStyle.Primary
+      )
+      .setDisabled(
+        finished
+      );
 
   const leave =
     new ButtonBuilder()
       .setCustomId(
         `giveaway_leave:${giveaway.id}`
       )
-      .setLabel('Quitter')
+      .setLabel(
+        'Quitter'
+      )
       .setEmoji('🚪')
-      .setStyle(ButtonStyle.Secondary);
+      .setStyle(
+        ButtonStyle.Secondary
+      )
+      .setDisabled(
+        finished
+      );
+
+  let title =
+    'Giveaway';
+
+  let statusText =
+    `**Temps restant :** <t:${Math.floor(giveaway.end_at / 1000)}:R>`;
+
+  if (
+    giveaway.status ===
+    'awaiting_claim'
+  ) {
+    title =
+      'Fermer';
+
+    statusText =
+      [
+        '**État :** 🟡 En attente de réclamation',
+        giveaway.current_winner_id
+          ? `**Gagnant actuel :** <@${giveaway.current_winner_id}>`
+          : '',
+        giveaway.claim_deadline
+          ? `**Réclamation jusqu’au :** <t:${Math.floor(giveaway.claim_deadline / 1000)}:F>`
+          : ''
+      ]
+        .filter(Boolean)
+        .join('\n');
+  }
+
+  if (
+    giveaway.status ===
+    'claimed'
+  ) {
+    title =
+      'Fermer';
+
+    statusText =
+      [
+        '**État :** 🟢 Réclamation ouverte',
+        '**Délai de 24 h :** arrêté'
+      ].join('\n');
+  }
+
+  if (
+    giveaway.status ===
+    'ended'
+  ) {
+    title =
+      'Fermer';
+
+    statusText =
+      '**État :** 🔴 Fermé';
+  }
+
+  if (
+    giveaway.status ===
+    'no_winner'
+  ) {
+    title =
+      'Fermer';
+
+    statusText =
+      '**État :** 🔴 Aucun participant éligible restant';
+  }
+
+  const winnerHistory =
+    getExpiredWinners(
+      giveaway
+    );
+
+  const historyText =
+    winnerHistory.length
+      ? `**Anciens gagnants reroll :** ${winnerHistory.length}`
+      : '';
 
   return container({
-    title: 'Giveaway',
+    title,
     description:
-      `## ${giveaway.prize}\n\n` +
-      `**Gagnant(s) :** ${giveaway.winners}\n` +
-      `**Participants :** ${participants.length}\n` +
-      `**Fin :** <t:${Math.floor(giveaway.end_at / 1000)}:F>\n` +
-      `**Temps restant :** <t:${Math.floor(giveaway.end_at / 1000)}:R>\n\n` +
-      `**Rôle requis :** ${
+      [
+        `## ${giveaway.prize}`,
+        '',
+        `**Gagnant(s) prévu(s) :** ${giveaway.winners}`,
+        `**Participants :** ${participants.length}`,
         giveaway.required_role_id
-          ? `<@&${giveaway.required_role_id}>`
-          : 'Aucun'
-      }\n\n` +
-      'Utilise le bouton ci-dessous pour participer.',
+          ? `**Rôle requis :** <@&${giveaway.required_role_id}>`
+          : '**Rôle requis :** Aucun',
+        '',
+        statusText,
+        historyText,
+        '',
+        finished
+          ? 'Le giveaway est maintenant fermé.'
+          : 'Participe avec le bouton ci-dessous.'
+      ]
+        .filter(Boolean)
+        .join('\n'),
+
     accent:
-      0xFEE75C,
-    components: [
-      row(
-        participate,
-        leave
-      )
+      finished
+        ? config.appearance.neutralColor
+        : config.appearance.warningColor,
+
+    rows: [
+      new ActionRowBuilder()
+        .addComponents(
+          participate,
+          leave
+        )
     ],
+
     footer:
-      `Bretagne RP • Giveaway #${giveaway.id}`
+      `${config.serverName} • Giveaway #${giveaway.id}`
   });
 }
 
-async function updateGiveaway(
+// ============================================================================
+// GIVEAWAY MESSAGE UPDATE
+// ============================================================================
+
+async function fetchGiveawayMessage(
   giveaway
 ) {
   try {
     const channel =
-      await client.channels.fetch(
+      await getTextChannel(
+        client.guilds.cache.get(
+          giveaway.guild_id
+        ),
         giveaway.channel_id
       );
 
     if (
-      !channel?.isTextBased()
+      !channel
     ) {
-      return;
+      return null;
     }
 
-    const message =
-      await channel.messages.fetch(
-        giveaway.message_id
-      );
+    return await channel.messages.fetch(
+      giveaway.message_id
+    );
+  } catch {
+    return null;
+  }
+}
 
+async function updateGiveawayMessage(
+  giveaway
+) {
+  const guild =
+    client.guilds.cache.get(
+      giveaway.guild_id
+    );
+
+  if (
+    !guild
+  ) {
+    return;
+  }
+
+  const config =
+    getConfig(
+      guild.id
+    );
+
+  const message =
+    await fetchGiveawayMessage(
+      giveaway
+    );
+
+  if (
+    !message
+  ) {
+    return;
+  }
+
+  try {
     await message.edit(
       v2Message(
         buildGiveawayPanel(
-          giveaway
+          giveaway,
+          config
         )
       )
     );
-  } catch {}
+  } catch (error) {
+    console.error(
+      'Giveaway edit error:',
+      error.message
+    );
+  }
 }
 
-async function finishGiveaway(
-  giveawayId
+// ============================================================================
+// GIVEAWAY ANNOUNCEMENTS
+// ============================================================================
+
+async function announceGiveawayWinner(
+  giveaway,
+  winnerId,
+  isReroll = false
+) {
+  const guild =
+    client.guilds.cache.get(
+      giveaway.guild_id
+    );
+
+  if (
+    !guild
+  ) {
+    return null;
+  }
+
+  const channel =
+    await getTextChannel(
+      guild,
+      giveaway.channel_id
+    );
+
+  if (
+    !channel
+  ) {
+    return null;
+  }
+
+  const deadline =
+    Math.floor(
+      giveaway.claim_deadline / 1000
+    );
+
+  let content;
+
+  if (
+    isReroll
+  ) {
+    content =
+      `🔄 **REROLL DU GIVEAWAY #${giveaway.id}**\n\n` +
+      `Le délai du gagnant précédent est arrivé à expiration sans réclamation.\n\n` +
+      `🎉 **Nouveau gagnant :** <@${winnerId}>\n` +
+      `🎁 **Récompense :** **${giveaway.prize}**\n` +
+      `⏱️ **Tu as 24 heures pour réclamer ton lot.**\n` +
+      `🎫 Ouvre le ticket **« Giveaways • Réclamation »** dans le panneau des tickets.\n\n` +
+      `⚠️ Passé **<t:${deadline}:F>**, le giveaway sera automatiquement **reroll** une nouvelle fois.`;
+  } else {
+    content =
+      `🎉 **GIVEAWAY TERMINÉ — #${giveaway.id}**\n\n` +
+      `🏆 **Félicitations <@${winnerId}> ! Tu as gagné le giveaway !**\n\n` +
+      `🎁 **Récompense :** **${giveaway.prize}**\n` +
+      `⏱️ **Tu as 24 heures pour réclamer ton lot.**\n` +
+      `🎫 Ouvre le ticket **« Giveaways • Réclamation »** dans le panneau des tickets.\n\n` +
+      `⚠️ Passé **<t:${deadline}:F>**, ton gain sera automatiquement **reroll**.`;
+  }
+
+  try {
+    const reply =
+      await channel.send(
+        {
+          content
+        }
+      );
+
+    return reply;
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================================
+// START GIVEAWAY CLAIM ROUND
+// ============================================================================
+
+async function startGiveawayClaimRound(
+  giveawayId,
+  isReroll = false
 ) {
   const giveaway =
     db.prepare(`
@@ -1954,796 +3245,259 @@ async function finishGiveaway(
     );
 
   if (
-    !giveaway ||
-    giveaway.ended
+    !giveaway
   ) {
     return;
   }
 
   const participants =
-    JSON.parse(
-      giveaway.participants
+    getGiveawayParticipants(
+      giveaway
     );
 
-  const shuffled =
-    [...participants];
+  let expiredWinners =
+    getExpiredWinners(
+      giveaway
+    );
 
-  for (
-    let i = shuffled.length - 1;
-    i > 0;
-    i--
+  /*
+   * If the previous winner existed and we are rerolling,
+   * permanently exclude them from the next draw.
+   */
+  if (
+    isReroll &&
+    giveaway.current_winner_id
   ) {
-    const j =
-      Math.floor(
-        Math.random() * (i + 1)
+    if (
+      !expiredWinners.includes(
+        giveaway.current_winner_id
+      )
+    ) {
+      expiredWinners.push(
+        giveaway.current_winner_id
       );
-
-    [
-      shuffled[i],
-      shuffled[j]
-    ] = [
-      shuffled[j],
-      shuffled[i]
-    ];
+    }
   }
 
-  const winners =
-    shuffled.slice(
-      0,
-      giveaway.winners
-    );
-
-  const winnerText =
-    winners.length
-      ? winners
-          .map(id => `<@${id}>`)
-          .join(', ')
-      : 'Aucun gagnant';
-
-  db.prepare(`
-    UPDATE giveaways
-    SET ended = 1
-    WHERE id = ?
-  `).run(
-    giveawayId
-  );
-
-  const channel =
-    await client.channels.fetch(
-      giveaway.channel_id
+  const pool =
+    participants.filter(
+      userId =>
+        !expiredWinners.includes(
+          userId
+        )
     );
 
   if (
-    channel?.isTextBased()
+    !pool.length
   ) {
-    await channel.send(
-      v2Message(
-        container({
-          title:
-            'Giveaway terminé',
-          description:
-            `## ${giveaway.prize}\n\n` +
-            `**Gagnant(s) :** ${winnerText}\n` +
-            `**Participants :** ${participants.length}`,
-          accent:
-            0x57F287,
-          footer:
-            `Giveaway #${giveaway.id}`
-        })
-      )
+    db.prepare(`
+      UPDATE giveaways
+      SET
+        status = 'no_winner',
+        ended = 1,
+        current_winner_id = NULL,
+        claim_deadline = NULL,
+        expired_winners = ?
+      WHERE id = ?
+    `).run(
+      JSON.stringify(
+        expiredWinners
+      ),
+      giveaway.id
     );
-  }
 
-  try {
-    const original =
-      await channel.messages.fetch(
-        giveaway.message_id
+    const updated =
+      db.prepare(`
+        SELECT *
+        FROM giveaways
+        WHERE id = ?
+      `).get(
+        giveaway.id
       );
 
-    await original.edit(
-      v2Message(
-        container({
-          title:
-            'Giveaway terminé',
-          description:
-            `## ${giveaway.prize}\n\n` +
-            `**Gagnant(s) :** ${winnerText}\n` +
-            `**Participants :** ${participants.length}`,
-          accent:
-            0x57F287,
-          footer:
-            `Giveaway #${giveaway.id}`
-        })
-      )
+    await updateGiveawayMessage(
+      updated
     );
-  } catch {}
-}
 
-// ============================================================================
-// SESSION
-// ============================================================================
-
-function buildSessionOpen(
-  config,
-  serverCode
-) {
-  return container({
-    title:
-      'Session RP ouverte',
-    description:
-      `## État du serveur\n\n` +
-      `**Statut :** 🟢 Ouvert\n\n` +
-      `**Code serveur :** \`${serverCode}\`\n\n` +
-      'La session RP est officiellement ouverte.',
-    accent:
-      config.appearance.successColor,
-    footer:
-      `${config.serverName} • Session ouverte`
-  });
-}
-
-function buildSessionClosed(
-  config
-) {
-  return container({
-    title:
-      'Session RP fermée',
-    description:
-      `## État du serveur\n\n` +
-      '**Statut :** 🔴 Fermé\n\n' +
-      'La session RP est actuellement fermée.',
-    accent:
-      config.appearance.dangerColor,
-    footer:
-      `${config.serverName} • Session fermée`
-  });
-}
-
-async function clearChannel(
-  channel
-) {
-  while (true) {
-    const messages =
-      await channel.messages.fetch({
-        limit: 100
-      });
-
-    if (!messages.size) {
-      break;
-    }
-
-    const recent =
-      messages.filter(
-        message =>
-          Date.now() -
-          message.createdTimestamp <
-          14 * 24 * 60 * 60 * 1000
+    const guild =
+      client.guilds.cache.get(
+        giveaway.guild_id
       );
-
-    const old =
-      messages.filter(
-        message =>
-          Date.now() -
-          message.createdTimestamp >=
-          14 * 24 * 60 * 60 * 1000
-      );
-
-    if (recent.size) {
-      try {
-        await channel.bulkDelete(
-          recent,
-          true
-        );
-      } catch {
-        for (
-          const message of recent.values()
-        ) {
-          try {
-            await message.delete();
-          } catch {}
-        }
-      }
-    }
-
-    if (old.size) {
-      for (
-        const message of old.values()
-      ) {
-        try {
-          await message.delete();
-        } catch {}
-      }
-    }
 
     if (
-      messages.size < 100
+      guild
     ) {
-      break;
-    }
-  }
-}
-
-// ============================================================================
-// LOG
-// ============================================================================
-
-async function log(
-  guild,
-  title,
-  description,
-  accent = 0x5865F2
-) {
-  const config =
-    getConfig(guild.id);
-
-  if (!config.channels.logs) {
-    return;
-  }
-
-  const channel =
-    await getTextChannel(
-      guild,
-      config.channels.logs
-    );
-
-  if (!channel) {
-    return;
-  }
-
-  try {
-    await channel.send(
-      v2Message(
-        container({
-          title,
-          description,
-          accent,
-          footer:
-            `${config.serverName} • Journal`
-        })
-      )
-    );
-  } catch {}
-}
-
-// ============================================================================
-// COMMAND: /config
-// ============================================================================
-
-const configCommand =
-  new SlashCommandBuilder()
-    .setName('config')
-    .setDescription(
-      'Ouvrir le panneau de configuration de Bretagne RP'
-    );
-
-const commands = [
-  configCommand,
-
-  new SlashCommandBuilder()
-    .setName('suggestion')
-    .setDescription(
-      'Envoyer une suggestion'
-    ),
-
-  new SlashCommandBuilder()
-    .setName('giveaway')
-    .setDescription(
-      'Créer un giveaway'
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName('create')
-        .setDescription(
-          'Créer un giveaway'
-        )
-        .addStringOption(option =>
-          option
-            .setName('duration')
-            .setDescription(
-              'Exemple : 30m, 2h, 1d'
-            )
-            .setRequired(true)
-        )
-        .addStringOption(option =>
-          option
-            .setName('prize')
-            .setDescription(
-              'Récompense'
-            )
-            .setRequired(true)
-            .setMaxLength(300)
-        )
-        .addIntegerOption(option =>
-          option
-            .setName('winners')
-            .setDescription(
-              'Nombre de gagnants'
-            )
-            .setRequired(true)
-            .setMinValue(1)
-            .setMaxValue(100)
-        )
-        .addRoleOption(option =>
-          option
-            .setName('role')
-            .setDescription(
-              'Rôle requis pour participer'
-            )
-        )
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName('end')
-        .setDescription(
-          'Terminer un giveaway'
-        )
-        .addIntegerOption(option =>
-          option
-            .setName('id')
-            .setDescription(
-              'ID du giveaway'
-            )
-            .setRequired(true)
-        )
-    ),
-
-  new SlashCommandBuilder()
-    .setName('session')
-    .setDescription(
-      'Gestion des sessions RP'
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName('open')
-        .setDescription(
-          'Ouvrir une session RP'
-        )
-        .addStringOption(option =>
-          option
-            .setName('server-code')
-            .setDescription(
-              'Code du serveur'
-            )
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName('shutdown')
-        .setDescription(
-          'Fermer la session RP'
-        )
-    )
-];
-
-// ============================================================================
-// CONFIG UI
-// ============================================================================
-
-function buildConfigHome(
-  config
-) {
-  const menu =
-    new StringSelectMenuBuilder()
-      .setCustomId(
-        'config_category'
-      )
-      .setPlaceholder(
-        'Choisir une catégorie...'
-      )
-      .addOptions(
-        new StringSelectMenuOptionBuilder()
-          .setLabel('Salons')
-          .setEmoji('📁')
-          .setDescription(
-            'Configurer les salons utilisés par le bot'
-          )
-          .setValue('channels'),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel('Rôles')
-          .setEmoji('👥')
-          .setDescription(
-            'Configurer les rôles'
-          )
-          .setValue('roles'),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel('Sécurité')
-          .setEmoji('🛡️')
-          .setDescription(
-            'Configurer les protections'
-          )
-          .setValue('security'),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel('Candidatures')
-          .setEmoji('📋')
-          .setDescription(
-            'Configurer les questions Staff'
-          )
-          .setValue('applications'),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel('Tickets')
-          .setEmoji('🎫')
-          .setDescription(
-            'Configurer les tickets'
-          )
-          .setValue('tickets'),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel('Sessions RP')
-          .setEmoji('🟢')
-          .setDescription(
-            'Configurer les sessions'
-          )
-          .setValue('sessions'),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel('Systèmes')
-          .setEmoji('⚙️')
-          .setDescription(
-            'Activer ou désactiver les fonctions'
-          )
-          .setValue('systems'),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel('Apparence')
-          .setEmoji('🎨')
-          .setDescription(
-            'Configurer les couleurs'
-          )
-          .setValue('appearance')
-      );
-
-  const refresh =
-    new ButtonBuilder()
-      .setCustomId(
-        'config_refresh'
-      )
-      .setLabel('Actualiser')
-      .setEmoji('↻')
-      .setStyle(
-        ButtonStyle.Secondary
-      );
-
-  return container({
-    title:
-      'Configuration de Bretagne RP',
-    description:
-      '## Centre de configuration\n\n' +
-      'Bienvenue dans le panneau de configuration.\n\n' +
-      'Tout est organisé par catégories. Sélectionne une catégorie dans le menu pour modifier les paramètres.\n\n' +
-      `**Mode test :** ${config.testMode ? '🟢 Activé' : '🔴 Désactivé'}\n\n` +
-      '-# Les restrictions seront activées plus tard lorsque le serveur de test sera prêt.',
-    accent:
-      config.appearance.accentColor,
-    components: [
-      {
-        type: 'row',
-        row:
-          new ActionRowBuilder()
-            .addComponents(menu)
-      },
-      row(refresh)
-    ],
-    footer:
-      `${config.serverName} • Configuration`
-  });
-}
-
-// ============================================================================
-// CONFIG CATEGORY
-// ============================================================================
-
-function buildConfigCategory(
-  config,
-  category
-) {
-  let title = '';
-  let description = '';
-  let options = [];
-
-  if (category === 'channels') {
-    title =
-      'Configuration • Salons';
-
-    description =
-      'Les salons utilisés actuellement par le bot.';
-
-    options = [
-      ['Salon bienvenue', 'channel_welcome'],
-      ['Salon règlement', 'channel_rules'],
-      ['Salon candidatures', 'channel_applications'],
-      ['Salon suggestions', 'channel_suggestions'],
-      ['Salon sessions', 'channel_sessions'],
-      ['Salon logs', 'channel_logs'],
-      ['Catégorie tickets', 'channel_ticket_category']
-    ];
-  }
-
-  if (category === 'roles') {
-    title =
-      'Configuration • Rôles';
-
-    description =
-      'Les rôles principaux utilisés par Bretagne RP.';
-
-    options = [
-      ['Rôle vérifié', 'role_verified'],
-      ['Rôle Staff', 'role_staff'],
-      ['Rôle Support', 'role_support'],
-      ['Rôle Configuration', 'role_config'],
-      ['Rôle Giveaways', 'role_giveaways']
-    ];
-  }
-
-  if (category === 'security') {
-    title =
-      'Configuration • Sécurité';
-
-    description =
-      'Configure les protections et les rôles bypass.';
-
-    options = [
-      ['Anti-raid', 'security_antiraid'],
-      ['Anti-spam', 'security_antispam'],
-      ['Mass mention', 'security_massmention'],
-      ['Suppression massive', 'security_massdelete'],
-      ['Mots interdits', 'security_badwords'],
-      ['Ajouter un bypass', 'security_bypass_add']
-    ];
-  }
-
-  if (category === 'applications') {
-    title =
-      'Configuration • Candidatures';
-
-    description =
-      `${config.applications.questions.length} question(s) actuellement configurée(s).`;
-
-    options = [
-      ['Liste des questions', 'app_questions'],
-      ['Ajouter une question', 'app_add'],
-      ['Supprimer une question', 'app_remove'],
-      ['Rôle Staff après acceptation', 'app_role_toggle']
-    ];
-  }
-
-  if (category === 'tickets') {
-    title =
-      'Configuration • Tickets';
-
-    description =
-      `Préfixe actuel : \`${config.tickets.prefix}\``;
-
-    options = [
-      ['Modifier le préfixe', 'ticket_prefix'],
-      ['Suppression après fermeture', 'ticket_delete']
-    ];
-  }
-
-  if (category === 'sessions') {
-    title =
-      'Configuration • Sessions';
-
-    description =
-      'Configure le comportement des sessions RP.';
-
-    options = [
-      ['Ping @everyone', 'session_ping'],
-      ['Effacer le salon à la fermeture', 'session_clear']
-    ];
-  }
-
-  if (category === 'systems') {
-    title =
-      'Configuration • Systèmes';
-
-    description =
-      'Active ou désactive les fonctions.';
-
-    options = [
-      ['Bienvenue', 'system_welcome'],
-      ['Règlement', 'system_rules'],
-      ['Candidatures', 'system_applications'],
-      ['Giveaways', 'system_giveaways'],
-      ['Tickets', 'system_tickets'],
-      ['Suggestions', 'system_suggestions'],
-      ['Sessions', 'system_sessions'],
-      ['Sécurité', 'system_security']
-    ];
-  }
-
-  if (category === 'appearance') {
-    title =
-      'Configuration • Apparence';
-
-    description =
-      'Configure l’accent visuel du bot.';
-
-    options = [
-      ['Changer la couleur principale', 'appearance_accent']
-    ];
-  }
-
-  const select =
-    new StringSelectMenuBuilder()
-      .setCustomId(
-        `config_option:${category}`
-      )
-      .setPlaceholder(
-        'Choisir un paramètre...'
-      )
-      .addOptions(
-        options.map(
-          ([label, value]) =>
-            new StringSelectMenuOptionBuilder()
-              .setLabel(label)
-              .setValue(value)
-        )
-      );
-
-  const back =
-    new ButtonBuilder()
-      .setCustomId(
-        'config_back'
-      )
-      .setLabel('Retour')
-      .setEmoji('←')
-      .setStyle(
-        ButtonStyle.Secondary
-      );
-
-  return container({
-    title,
-    description,
-    accent:
-      config.appearance.accentColor,
-    components: [
-      {
-        type: 'row',
-        row:
-          new ActionRowBuilder()
-            .addComponents(select)
-      },
-      row(back)
-    ],
-    footer:
-      'Bretagne RP • Configuration'
-  });
-}
-
-// ============================================================================
-// REGISTER COMMANDS
-// ============================================================================
-
-async function registerCommands() {
-  const rest =
-    new REST({
-      version: '10'
-    }).setToken(
-      TOKEN
-    );
-
-  const body =
-    commands.map(
-      command =>
-        command.toJSON()
-    );
-
-  if (GUILD_ID) {
-    await rest.put(
-      Routes.applicationGuildCommands(
-        CLIENT_ID,
-        GUILD_ID
-      ),
-      { body }
-    );
-
-    console.log(
-      `✅ Commandes enregistrées sur ${GUILD_ID}`
-    );
-  } else {
-    await rest.put(
-      Routes.applicationCommands(
-        CLIENT_ID
-      ),
-      { body }
-    );
-
-    console.log(
-      '✅ Commandes globales enregistrées'
-    );
-  }
-}
-
-// ============================================================================
-// READY
-// ============================================================================
-
-client.once(
-  Events.ClientReady,
-  async ready => {
-    console.log('');
-    console.log(
-      '══════════════════════════════════════════'
-    );
-    console.log(
-      `✅ ${ready.user.tag} est connecté`
-    );
-    console.log(
-      `🏠 Serveurs : ${ready.guilds.cache.size}`
-    );
-    console.log(
-      '🧩 Components V2 : actif'
-    );
-    console.log(
-      '🧠 SQLite : actif'
-    );
-    console.log(
-      '🇫🇷 Bretagne RP : actif'
-    );
-    console.log(
-      '══════════════════════════════════════════'
-    );
-    console.log('');
-
-    await registerCommands();
-
-    for (
-      const guild of ready.guilds.cache.values()
-    ) {
-      try {
-        await syncAllPanels(
-          guild
+      const channel =
+        await getTextChannel(
+          guild,
+          giveaway.channel_id
         );
 
-        console.log(
-          `✅ Panels vérifiés : ${guild.name}`
-        );
-      } catch (error) {
-        console.error(
-          `❌ Panel error (${guild.name}):`,
-          error.message
-        );
+      if (
+        channel
+      ) {
+        await channel.send({
+          content:
+            `⚠️ **GIVEAWAY #${giveaway.id}**\n\n` +
+            `Il n’y a plus de participant éligible après les rerolls.\n` +
+            `La récompense **${giveaway.prize}** n’a donc pas pu être attribuée.`
+        });
       }
     }
 
-    setInterval(
-      processGiveaways,
-      5000
+    return;
+  }
+
+  const winner =
+    pool[
+      Math.floor(
+        Math.random() *
+          pool.length
+      )
+    ];
+
+  const config =
+    getConfig(
+      giveaway.guild_id
+    );
+
+  const deadline =
+    Date.now() +
+    config.giveaways.claimHours *
+      60 *
+      60 *
+      1000;
+
+  const nextRound =
+    giveaway.claim_round + 1;
+
+  db.prepare(`
+    UPDATE giveaways
+    SET
+      status = 'awaiting_claim',
+      ended = 1,
+      current_winner_id = ?,
+      claim_deadline = ?,
+      claim_round = ?,
+      expired_winners = ?,
+      announcement_message_id = NULL,
+      claim_ticket_channel_id = NULL,
+      claimed_at = NULL
+    WHERE id = ?
+  `).run(
+    winner,
+    deadline,
+    nextRound,
+    JSON.stringify(
+      expiredWinners
+    ),
+    giveaway.id
+  );
+
+  const updated =
+    db.prepare(`
+      SELECT *
+      FROM giveaways
+      WHERE id = ?
+    `).get(
+      giveaway.id
+    );
+
+  /*
+   * Original giveaway message:
+   * same visual structure, title becomes exactly "Fermer".
+   */
+  await updateGiveawayMessage(
+    updated
+  );
+
+  /*
+   * Plain message reply / announcement.
+   */
+  const announcement =
+    await announceGiveawayWinner(
+      updated,
+      winner,
+      isReroll
+    );
+
+  if (
+    announcement
+  ) {
+    db.prepare(`
+      UPDATE giveaways
+      SET announcement_message_id = ?
+      WHERE id = ?
+    `).run(
+      announcement.id,
+      giveaway.id
     );
   }
-);
+
+  console.log(
+    `${isReroll ? '🔄' : '🏆'} Giveaway #${giveaway.id} winner: ${winner}`
+  );
+}
 
 // ============================================================================
-// GIVEAWAY LOOP
+// GIVEAWAY PROCESSOR
 // ============================================================================
 
 async function processGiveaways() {
-  const giveaways =
+  const now =
+    Date.now();
+
+  // --------------------------------------------------------------------------
+  // Active giveaways
+  // --------------------------------------------------------------------------
+
+  const ending =
     db.prepare(`
       SELECT *
       FROM giveaways
       WHERE ended = 0
+        AND status = 'active'
         AND end_at <= ?
     `).all(
-      Date.now()
+      now
     );
 
   for (
-    const giveaway of giveaways
+    const giveaway of ending
   ) {
-    await finishGiveaway(
-      giveaway.id
+    await startGiveawayClaimRound(
+      giveaway.id,
+      false
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // Waiting for claim
+  // --------------------------------------------------------------------------
+
+  const expiredClaims =
+    db.prepare(`
+      SELECT *
+      FROM giveaways
+      WHERE status = 'awaiting_claim'
+        AND claim_deadline IS NOT NULL
+        AND claim_deadline <= ?
+    `).all(
+      now
+    );
+
+  for (
+    const giveaway of expiredClaims
+  ) {
+    await startGiveawayClaimRound(
+      giveaway.id,
+      true
     );
   }
 }
 
 // ============================================================================
-// MEMBER JOIN
+// MEMBER JOIN / ANTI RAID
 // ============================================================================
 
 client.on(
@@ -2787,38 +3541,106 @@ client.on(
       );
     }
 
-    const list =
-      raidTracker.get(key);
+    const joins =
+      raidTracker.get(
+        key
+      );
 
     const now =
       Date.now();
 
-    list.push(
+    joins.push(
       now
     );
 
     while (
-      list.length &&
-      now - list[0] >
+      joins.length &&
+      now - joins[0] >
         config.security.antiRaid.windowSeconds * 1000
     ) {
-      list.shift();
+      joins.shift();
     }
 
     if (
-      list.length >=
+      joins.length >=
       config.security.antiRaid.joinThreshold
     ) {
-      await log(
-        member.guild,
-        'Détection anti-raid',
-        `Une arrivée importante de membres a été détectée.\n\n` +
-        `**Entrées dans la fenêtre :** ${list.length}`,
-        0xED4245
-      );
+      if (
+        config.security.antiRaid
+          .timeoutNewMembers
+      ) {
+        const result =
+          await applyProgressiveTimeout(
+            member,
+            'Détection anti-raid'
+          );
+
+        await logEvent(
+          member.guild,
+          'Détection anti-raid',
+          `${member} a rejoint pendant une activité de raid détectée.\n\n` +
+          `**Entrées détectées :** ${joins.length}\n` +
+          `**Sanction :** ${
+            result
+              ? formatDuration(
+                  result.seconds
+                )
+              : 'aucune'
+          }`,
+          0xED4245
+        );
+      }
     }
   }
 );
+
+// ============================================================================
+// MESSAGE LOG EVENT
+// ============================================================================
+
+async function logEvent(
+  guild,
+  title,
+  description,
+  accent = 0x5865F2
+) {
+  const config =
+    getConfig(
+      guild.id
+    );
+
+  if (
+    !config.channels.logs
+  ) {
+    return;
+  }
+
+  const channel =
+    await getTextChannel(
+      guild,
+      config.channels.logs
+    );
+
+  if (
+    !channel
+  ) {
+    return;
+  }
+
+  try {
+    await channel.send(
+      v2Message(
+        container({
+          title,
+          description,
+          accent,
+          footer:
+            `${config.serverName} • Journal`
+        })
+      )
+    );
+  } catch {}
+}
 
 // ============================================================================
 // MESSAGE SECURITY + APPLICATION DM
@@ -2828,18 +3650,22 @@ client.on(
   Events.MessageCreate,
   async message => {
     // ------------------------------------------------------------------------
-    // DM
+    // DM APPLICATION FLOW
     // ------------------------------------------------------------------------
 
-    if (!message.guild) {
-      await handleApplicationMessage(
+    if (
+      !message.guild
+    ) {
+      await handleApplicationDM(
         message
       );
 
       return;
     }
 
-    if (message.author.bot) {
+    if (
+      message.author.bot
+    ) {
       return;
     }
 
@@ -2878,7 +3704,9 @@ client.on(
           config
         );
 
-      if (found) {
+      if (
+        found
+      ) {
         try {
           await message.delete();
         } catch {}
@@ -2889,13 +3717,15 @@ client.on(
             `Mot interdit détecté : ${found}`
           );
 
-        if (result) {
-          await log(
+        if (
+          result
+        ) {
+          await logEvent(
             guild,
             'Mot interdit détecté',
             `${member} a déclenché la modération automatique.\n\n` +
-            `**Sanction :** ${formatDuration(result.seconds)}\n` +
-            `**Niveau :** ${result.strike}`,
+            `**Niveau :** ${result.strike}\n` +
+            `**Timeout :** ${formatDuration(result.seconds)}`,
             0xED4245
           );
         }
@@ -2916,21 +3746,27 @@ client.on(
         'antiMassMention'
       )
     ) {
-      let count =
+      let mentions =
         message.mentions.users.size +
         message.mentions.roles.size;
 
-      if (message.mentions.everyone) {
-        count =
+      if (
+        message.mentions.everyone
+      ) {
+        mentions =
           Math.max(
-            count,
-            config.security.antiMassMention.threshold
+            mentions,
+            config.security
+              .antiMassMention
+              .threshold
           );
       }
 
       if (
-        count >=
-        config.security.antiMassMention.threshold
+        mentions >=
+        config.security
+          .antiMassMention
+          .threshold
       ) {
         try {
           await message.delete();
@@ -2942,11 +3778,14 @@ client.on(
             'Mass mention détectée'
           );
 
-        if (result) {
-          await log(
+        if (
+          result
+        ) {
+          await logEvent(
             guild,
             'Mass mention bloquée',
-            `${member} a été sanctionné pour une utilisation excessive des mentions.`,
+            `${member} a utilisé trop de mentions.\n\n` +
+            `**Timeout :** ${formatDuration(result.seconds)}`,
             0xED4245
           );
         }
@@ -2980,7 +3819,9 @@ client.on(
       }
 
       const timestamps =
-        spamTracker.get(key);
+        spamTracker.get(
+          key
+        );
 
       const now =
         Date.now();
@@ -2992,14 +3833,19 @@ client.on(
       while (
         timestamps.length &&
         now - timestamps[0] >
-          config.security.antiSpam.windowSeconds * 1000
+          config.security
+            .antiSpam
+            .windowSeconds *
+            1000
       ) {
         timestamps.shift();
       }
 
       if (
         timestamps.length >=
-        config.security.antiSpam.messageThreshold
+        config.security
+          .antiSpam
+          .messageThreshold
       ) {
         try {
           await message.delete();
@@ -3013,15 +3859,19 @@ client.on(
             'Spam détecté'
           );
 
-        if (result) {
-          await log(
+        if (
+          result
+        ) {
+          await logEvent(
             guild,
             'Anti-spam déclenché',
             `${member} a été sanctionné automatiquement.\n\n` +
-            `**Sanction :** ${formatDuration(result.seconds)}`,
+            `**Timeout :** ${formatDuration(result.seconds)}`,
             0xED4245
           );
         }
+
+        return;
       }
     }
   }
@@ -3031,10 +3881,12 @@ client.on(
 // APPLICATION DM HANDLER
 // ============================================================================
 
-async function handleApplicationMessage(
+async function handleApplicationDM(
   message
 ) {
-  if (message.author.bot) {
+  if (
+    message.author.bot
+  ) {
     return;
   }
 
@@ -3050,7 +3902,9 @@ async function handleApplicationMessage(
       message.author.id
     );
 
-  if (!application) {
+  if (
+    !application
+  ) {
     return;
   }
 
@@ -3059,31 +3913,46 @@ async function handleApplicationMessage(
       application.guild_id
     );
 
+  if (
+    !config.systems.applications
+  ) {
+    return;
+  }
+
   const questions =
     config.applications.questions;
 
-  const answers =
-    JSON.parse(
-      application.answers
-    );
+  if (
+    !questions.length
+  ) {
+    return;
+  }
 
   if (
-    message.content.length > 1000
+    message.content.length >
+    1000
   ) {
     await message.author.send(
       v2Message(
         container({
-          title: 'Réponse trop longue',
+          title:
+            'Réponse trop longue',
           description:
-            'Ta réponse est limitée à 1000 caractères.\n\n' +
+            'Ta réponse dépasse la limite de **1000 caractères**.\n\n' +
             'Envoie une réponse plus courte.',
-          accent: 0xED4245
+          accent:
+            0xED4245
         })
       )
     );
 
     return;
   }
+
+  const answers =
+    JSON.parse(
+      application.answers || '[]'
+    );
 
   answers.push(
     message.content
@@ -3093,7 +3962,8 @@ async function handleApplicationMessage(
     application.question_index + 1;
 
   if (
-    nextIndex >= questions.length
+    nextIndex >=
+    questions.length
   ) {
     db.prepare(`
       UPDATE applications
@@ -3103,7 +3973,9 @@ async function handleApplicationMessage(
         status = 'pending'
       WHERE id = ?
     `).run(
-      JSON.stringify(answers),
+      JSON.stringify(
+        answers
+      ),
       nextIndex,
       application.id
     );
@@ -3114,8 +3986,13 @@ async function handleApplicationMessage(
           title:
             'Candidature terminée',
           description:
-            'Merci ! Tu as répondu à toutes les questions.\n\n' +
-            'Ta candidature est maintenant envoyée au Staff.',
+            [
+              'Merci pour tes réponses.',
+              '',
+              'Ta candidature est maintenant envoyée au Staff.',
+              '',
+              'Tu seras contacté lorsque la décision sera prise.'
+            ].join('\n'),
           accent:
             0x57F287
         })
@@ -3145,7 +4022,9 @@ async function handleApplicationMessage(
       question_index = ?
     WHERE id = ?
   `).run(
-    JSON.stringify(answers),
+    JSON.stringify(
+      answers
+    ),
     nextIndex,
     application.id
   );
@@ -3159,7 +4038,7 @@ async function handleApplicationMessage(
       application.id
     );
 
-  await askNextApplicationQuestion(
+  await askApplicationQuestion(
     updated
   );
 }
@@ -3171,12 +4050,21 @@ async function handleApplicationMessage(
 client.on(
   Events.GuildAuditLogEntryCreate,
   async entry => {
+    if (
+      entry.action !==
+      AuditLogEvent.MessageBulkDelete
+    ) {
+      return;
+    }
+
     const guild =
       client.guilds.cache.get(
         entry.guild.id
       );
 
-    if (!guild) {
+    if (
+      !guild
+    ) {
       return;
     }
 
@@ -3191,12 +4079,6 @@ client.on(
       return;
     }
 
-    if (
-      !entry.action
-    ) {
-      return;
-    }
-
     const count =
       Number(
         entry.extra?.count || 0
@@ -3204,22 +4086,23 @@ client.on(
 
     if (
       count <
-      config.security.antiMassDelete.threshold
+      config.security
+        .antiMassDelete
+        .threshold
     ) {
       return;
     }
 
-    const executorId =
-      entry.executorId;
-
-    if (!executorId) {
+    if (
+      !entry.executorId
+    ) {
       return;
     }
 
     try {
       const member =
         await guild.members.fetch(
-          executorId
+          entry.executorId
         );
 
       if (
@@ -3246,13 +4129,15 @@ client.on(
           'Suppression massive de messages'
         );
 
-      if (result) {
-        await log(
+      if (
+        result
+      ) {
+        await logEvent(
           guild,
           'Suppression massive détectée',
-          `${member} a déclenché la protection contre les suppressions massives.\n\n` +
-          `**Messages concernés :** ${count}\n` +
-          `**Sanction :** ${formatDuration(result.seconds)}`,
+          `${member} a supprimé massivement des messages.\n\n` +
+          `**Nombre détecté :** ${count}\n` +
+          `**Timeout :** ${formatDuration(result.seconds)}`,
           0xED4245
         );
       }
@@ -3261,7 +4146,1340 @@ client.on(
 );
 
 // ============================================================================
-// INTERACTIONS
+// COMMANDS
+// ============================================================================
+
+const commands = [
+  // --------------------------------------------------------------------------
+  // /config
+  // --------------------------------------------------------------------------
+
+  new SlashCommandBuilder()
+    .setName('config')
+    .setDescription(
+      'Ouvrir la configuration interactive de Bretagne RP'
+    ),
+
+  // --------------------------------------------------------------------------
+  // /suggestion
+  // --------------------------------------------------------------------------
+
+  new SlashCommandBuilder()
+    .setName('suggestion')
+    .setDescription(
+      'Envoyer une suggestion'
+    ),
+
+  // --------------------------------------------------------------------------
+  // /giveaway
+  // --------------------------------------------------------------------------
+
+  new SlashCommandBuilder()
+    .setName('giveaway')
+    .setDescription(
+      'Gestion des giveaways'
+    )
+    .addSubcommand(
+      sub =>
+        sub
+          .setName('create')
+          .setDescription(
+            'Créer un giveaway'
+          )
+          .addStringOption(
+            option =>
+              option
+                .setName('duration')
+                .setDescription(
+                  'Ex: 30m, 2h, 1d'
+                )
+                .setRequired(true)
+          )
+          .addStringOption(
+            option =>
+              option
+                .setName('prize')
+                .setDescription(
+                  'Récompense'
+                )
+                .setRequired(true)
+                .setMaxLength(300)
+          )
+          .addIntegerOption(
+            option =>
+              option
+                .setName('winners')
+                .setDescription(
+                  'Nombre de gagnants'
+                )
+                .setRequired(true)
+                .setMinValue(1)
+                .setMaxValue(100)
+          )
+          .addRoleOption(
+            option =>
+              option
+                .setName('role')
+                .setDescription(
+                  'Rôle requis pour participer'
+                )
+          )
+    )
+    .addSubcommand(
+      sub =>
+        sub
+          .setName('end')
+          .setDescription(
+            'Terminer immédiatement un giveaway'
+          )
+          .addIntegerOption(
+            option =>
+              option
+                .setName('id')
+                .setDescription(
+                  'ID du giveaway'
+                )
+                .setRequired(true)
+          )
+    )
+    .addSubcommand(
+      sub =>
+        sub
+          .setName('reroll')
+          .setDescription(
+            'Forcer un reroll'
+          )
+          .addIntegerOption(
+            option =>
+              option
+                .setName('id')
+                .setDescription(
+                  'ID du giveaway'
+                )
+                .setRequired(true)
+          )
+    ),
+
+  // --------------------------------------------------------------------------
+  // /session
+  // --------------------------------------------------------------------------
+
+  new SlashCommandBuilder()
+    .setName('session')
+    .setDescription(
+      'Gestion des sessions RP'
+    )
+    .addSubcommand(
+      sub =>
+        sub
+          .setName('open')
+          .setDescription(
+            'Ouvrir une session RP'
+          )
+          .addStringOption(
+            option =>
+              option
+                .setName('server-code')
+                .setDescription(
+                  'Code du serveur'
+                )
+                .setRequired(true)
+          )
+    )
+    .addSubcommand(
+      sub =>
+        sub
+          .setName('shutdown')
+          .setDescription(
+            'Fermer une session RP'
+          )
+    )
+];
+
+// ============================================================================
+// /CONFIG HOME
+// ============================================================================
+
+function buildConfigHome(
+  config
+) {
+  const menu =
+    new StringSelectMenuBuilder()
+      .setCustomId(
+        'config_category'
+      )
+      .setPlaceholder(
+        'Choisir une catégorie...'
+      )
+      .addOptions(
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Salons'
+          )
+          .setEmoji('📁')
+          .setDescription(
+            'Configurer les salons'
+          )
+          .setValue(
+            'channels'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Rôles'
+          )
+          .setEmoji('👥')
+          .setDescription(
+            'Configurer les rôles'
+          )
+          .setValue(
+            'roles'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Sécurité'
+          )
+          .setEmoji('🛡️')
+          .setDescription(
+            'Configurer les protections'
+          )
+          .setValue(
+            'security'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Candidatures'
+          )
+          .setEmoji('📋')
+          .setDescription(
+            'Configurer le recrutement'
+          )
+          .setValue(
+            'applications'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Tickets'
+          )
+          .setEmoji('🎫')
+          .setDescription(
+            'Visibilité et pings par type'
+          )
+          .setValue(
+            'tickets'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Giveaways'
+          )
+          .setEmoji('🎉')
+          .setDescription(
+            'Configurer les giveaways'
+          )
+          .setValue(
+            'giveaways'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Sessions RP'
+          )
+          .setEmoji('🟢')
+          .setDescription(
+            'Configurer les sessions'
+          )
+          .setValue(
+            'sessions'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Systèmes'
+          )
+          .setEmoji('⚙️')
+          .setDescription(
+            'Activer ou fermer des systèmes'
+          )
+          .setValue(
+            'systems'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Apparence'
+          )
+          .setEmoji('🎨')
+          .setDescription(
+            'Couleurs et identité'
+          )
+          .setValue(
+            'appearance'
+          )
+      );
+
+  const refresh =
+    new ButtonBuilder()
+      .setCustomId(
+        'config_refresh'
+      )
+      .setLabel(
+        'Actualiser'
+      )
+      .setEmoji('↻')
+      .setStyle(
+        ButtonStyle.Secondary
+      );
+
+  return container({
+    title:
+      'Configuration de Bretagne RP',
+
+    description:
+      [
+        '## Centre de configuration',
+        '',
+        'Tout est regroupé ici afin d’éviter une dizaine de commandes différentes.',
+        '',
+        `**Mode test :** ${
+          config.testMode
+            ? '🟢 Activé'
+            : '🔴 Désactivé'
+        }`,
+        '',
+        `**Candidatures :** ${
+          config.systems.applications
+            ? '🟢 Ouvertes'
+            : '🔴 Fermées'
+        }`,
+        `**Tickets :** ${
+          config.systems.tickets
+            ? '🟢 Actifs'
+            : '🔴 Désactivés'
+        }`,
+        `**Sécurité :** ${
+          config.systems.security
+            ? '🟢 Active'
+            : '🔴 Désactivée'
+        }`,
+        '',
+        'Choisis une catégorie dans le menu pour modifier le bot.'
+      ].join('\n'),
+
+    accent:
+      config.appearance.accentColor,
+
+    rows: [
+      new ActionRowBuilder()
+        .addComponents(
+          menu
+        ),
+      new ActionRowBuilder()
+        .addComponents(
+          refresh
+        )
+    ],
+
+    footer:
+      `${config.serverName} • Configuration`
+  });
+}
+
+// ============================================================================
+// CONFIG CATEGORY
+// ============================================================================
+
+function configCategoryView(
+  config,
+  category
+) {
+  const back =
+    new ButtonBuilder()
+      .setCustomId(
+        'config_back'
+      )
+      .setLabel(
+        'Retour'
+      )
+      .setEmoji('←')
+      .setStyle(
+        ButtonStyle.Secondary
+      );
+
+  // --------------------------------------------------------------------------
+  // CHANNELS
+  // --------------------------------------------------------------------------
+
+  if (
+    category === 'channels'
+  ) {
+    const menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'config_channel_target'
+        )
+        .setPlaceholder(
+          'Choisir quel salon modifier...'
+        )
+        .addOptions(
+          [
+            ['Bienvenue', 'welcome'],
+            ['Règlement', 'rules'],
+            ['Candidatures', 'applicationLogs'],
+            ['Suggestions', 'suggestions'],
+            ['Sessions', 'sessions'],
+            ['Logs', 'logs'],
+            ['Panneau tickets', 'ticketPanel'],
+            ['Catégorie tickets support', 'ticketCategorySupport'],
+            ['Catégorie réclamations', 'ticketCategoryGiveawayClaim']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    return container({
+      title:
+        'Configuration • Salons',
+
+      description:
+        [
+          'Choisis un paramètre puis sélectionne le salon directement.',
+          '',
+          `**Bienvenue :** ${
+            config.channels.welcome
+              ? `<#${config.channels.welcome}>`
+              : 'Non configuré'
+          }`,
+          `**Règlement :** ${
+            config.channels.rules
+              ? `<#${config.channels.rules}>`
+              : 'Non configuré'
+          }`,
+          `**Candidatures :** ${
+            config.channels.applicationLogs
+              ? `<#${config.channels.applicationLogs}>`
+              : 'Non configuré'
+          }`,
+          `**Suggestions :** ${
+            config.channels.suggestions
+              ? `<#${config.channels.suggestions}>`
+              : 'Non configuré'
+          }`,
+          `**Sessions :** ${
+            config.channels.sessions
+              ? `<#${config.channels.sessions}>`
+              : 'Même salon que la commande'
+          }`
+        ].join('\n'),
+
+      accent:
+        config.appearance.accentColor,
+
+      rows: [
+        new ActionRowBuilder()
+          .addComponents(
+            menu
+          ),
+        new ActionRowBuilder()
+          .addComponents(
+            back
+          )
+      ],
+
+      footer:
+        'Clique sur un paramètre puis choisis le salon.'
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // ROLES
+  // --------------------------------------------------------------------------
+
+  if (
+    category === 'roles'
+  ) {
+    const menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'config_role_target'
+        )
+        .setPlaceholder(
+          'Choisir quel rôle modifier...'
+        )
+        .addOptions(
+          [
+            ['Rôle vérifié', 'verified'],
+            ['Rôle Staff', 'staff'],
+            ['Rôle Configuration', 'config'],
+            ['Rôle Giveaways', 'giveaways'],
+            ['Rôle Support', 'ticketSupport']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    return container({
+      title:
+        'Configuration • Rôles',
+
+      description:
+        [
+          'Choisis le paramètre puis sélectionne le rôle.',
+          '',
+          `**Vérifié :** ${
+            config.roles.verified
+              ? `<@&${config.roles.verified}>`
+              : 'Non configuré'
+          }`,
+          `**Staff :** ${
+            config.roles.staff
+              ? `<@&${config.roles.staff}>`
+              : 'Non configuré'
+          }`,
+          `**Configuration :** ${
+            config.roles.config
+              ? `<@&${config.roles.config}>`
+              : 'Non configuré'
+          }`,
+          `**Giveaways :** ${
+            config.roles.giveaways
+              ? `<@&${config.roles.giveaways}>`
+              : 'Non configuré'
+          }`,
+          `**Support :** ${
+            config.roles.ticketSupport
+              ? `<@&${config.roles.ticketSupport}>`
+              : 'Non configuré'
+          }`
+        ].join('\n'),
+
+      accent:
+        config.appearance.accentColor,
+
+      rows: [
+        new ActionRowBuilder()
+          .addComponents(
+            menu
+          ),
+        new ActionRowBuilder()
+          .addComponents(
+            back
+          )
+      ],
+
+      footer:
+        'Sélection de rôle native Discord.'
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // SECURITY
+  // --------------------------------------------------------------------------
+
+  if (
+    category === 'security'
+  ) {
+    const menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'config_security_target'
+        )
+        .setPlaceholder(
+          'Choisir une fonction...'
+        )
+        .addOptions(
+          [
+            ['Anti-raid', 'antiRaid'],
+            ['Anti-spam', 'antiSpam'],
+            ['Mass mention', 'antiMassMention'],
+            ['Suppression massive', 'antiMassDelete'],
+            ['Mots interdits', 'badWords'],
+            ['Ajouter un rôle bypass', 'bypass']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    return container({
+      title:
+        'Configuration • Sécurité',
+
+      description:
+        [
+          'Configure les systèmes de protection et les rôles pouvant les bypass.',
+          '',
+          `**Anti-raid :** ${
+            config.systems.antiRaid
+              ? '🟢'
+              : '🔴'
+          }`,
+          `**Anti-spam :** ${
+            config.systems.antiSpam
+              ? '🟢'
+              : '🔴'
+          }`,
+          `**Mass mention :** ${
+            config.systems.antiMassMention
+              ? '🟢'
+              : '🔴'
+          }`,
+          `**Suppression massive :** ${
+            config.systems.antiMassDelete
+              ? '🟢'
+              : '🔴'
+          }`,
+          `**Mots interdits :** ${
+            config.systems.badWords
+              ? '🟢'
+              : '🔴'
+          }`,
+          '',
+          'Les sanctions augmentent progressivement pendant la journée.'
+        ].join('\n'),
+
+      accent:
+        config.appearance.dangerColor,
+
+      rows: [
+        new ActionRowBuilder()
+          .addComponents(
+            menu
+          ),
+        new ActionRowBuilder()
+          .addComponents(
+            back
+          )
+      ],
+
+      footer:
+        `${config.serverName} • Sécurité`
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // APPLICATIONS
+  // --------------------------------------------------------------------------
+
+  if (
+    category === 'applications'
+  ) {
+    const menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'config_application_target'
+        )
+        .setPlaceholder(
+          'Choisir un réglage...'
+        )
+        .addOptions(
+          [
+            ['Ouvrir / fermer les candidatures', 'toggle'],
+            ['Voir les questions', 'questions'],
+            ['Ajouter une question', 'add'],
+            ['Supprimer une question', 'remove'],
+            ['Rôle Staff après acceptation', 'staffRole']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    return container({
+      title:
+        'Configuration • Candidatures',
+
+      description:
+        [
+          `**État :** ${
+            config.systems.applications
+              ? '🟢 Ouvertes'
+              : '🔴 Fermées'
+          }`,
+          '',
+          `**Questions actuelles :** ${config.applications.questions.length}`,
+          '',
+          'Tu peux fermer temporairement les candidatures sans supprimer le panneau.',
+          '',
+          'Le panneau se mettra automatiquement à jour.'
+        ].join('\n'),
+
+      accent:
+        config.systems.applications
+          ? config.appearance.accentColor
+          : config.appearance.dangerColor,
+
+      rows: [
+        new ActionRowBuilder()
+          .addComponents(
+            menu
+          ),
+        new ActionRowBuilder()
+          .addComponents(
+            back
+          )
+      ],
+
+      footer:
+        'Recrutement Staff'
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // TICKETS
+  // --------------------------------------------------------------------------
+
+  if (
+    category === 'tickets'
+  ) {
+    const menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'config_ticket_target'
+        )
+        .setPlaceholder(
+          'Choisir ce que tu veux configurer...'
+        )
+        .addOptions(
+          [
+            ['Support • Voir', 'support_view'],
+            ['Support • Ping', 'support_ping'],
+            ['Giveaway • Voir', 'claim_view'],
+            ['Giveaway • Ping', 'claim_ping'],
+            ['Support • Catégorie', 'support_category'],
+            ['Giveaway • Catégorie', 'claim_category'],
+            ['Suppression après fermeture', 'delete']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    return container({
+      title:
+        'Configuration • Tickets',
+
+      description:
+        [
+          'Chaque type de ticket peut avoir sa propre visibilité et son propre ping.',
+          '',
+          '### 🎫 Support',
+          `**Voir :** ${formatRoleList(config.tickets.support.viewRoleIds)}`,
+          `**Ping :** ${formatRoleList(config.tickets.support.pingRoleIds)}`,
+          '',
+          '### 🏆 Giveaway • Réclamation',
+          `**Voir :** ${formatRoleList(config.tickets.giveawayClaim.viewRoleIds)}`,
+          `**Ping :** ${formatRoleList(config.tickets.giveawayClaim.pingRoleIds)}`,
+          '',
+          `**Suppression automatique :** ${
+            config.tickets.deleteAfterClose
+              ? '🟢'
+              : '🔴'
+          }`
+        ].join('\n'),
+
+      accent:
+        config.appearance.accentColor,
+
+      rows: [
+        new ActionRowBuilder()
+          .addComponents(
+            menu
+          ),
+        new ActionRowBuilder()
+          .addComponents(
+            back
+          )
+      ],
+
+      footer:
+        'Visibilité et notifications par type'
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // GIVEAWAYS
+  // --------------------------------------------------------------------------
+
+  if (
+    category === 'giveaways'
+  ) {
+    const backButton = back;
+
+    const menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'config_giveaway_target'
+        )
+        .setPlaceholder(
+          'Choisir un réglage...'
+        )
+        .addOptions(
+          [
+            ['Durée de réclamation', 'claim_hours'],
+            ['Rôle Giveaway', 'role'],
+            ['Voir les options', 'summary']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    return container({
+      title:
+        'Configuration • Giveaways',
+
+      description:
+        [
+          `**Rôle de gestion :** ${
+            config.roles.giveaways
+              ? `<@&${config.roles.giveaways}>`
+              : 'Non configuré'
+          }`,
+          '',
+          `**Réclamation :** ${config.giveaways.claimHours} heures`,
+          '',
+          'Lorsqu’un giveaway termine :',
+          '→ le message devient **Fermer**',
+          '→ le bot annonce le gagnant en message normal',
+          '→ le gagnant dispose du délai configuré',
+          '→ ouvrir le ticket de réclamation arrête le compteur',
+          '→ sinon le bot reroll automatiquement'
+        ].join('\n'),
+
+      accent:
+        config.appearance.warningColor,
+
+      rows: [
+        new ActionRowBuilder()
+          .addComponents(
+            menu
+          ),
+        new ActionRowBuilder()
+          .addComponents(
+            backButton
+          )
+      ],
+
+      footer:
+        'Gestion des giveaways'
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // SESSIONS
+  // --------------------------------------------------------------------------
+
+  if (
+    category === 'sessions'
+  ) {
+    const menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'config_session_target'
+        )
+        .setPlaceholder(
+          'Choisir un réglage...'
+        )
+        .addOptions(
+          [
+            ['Ping @everyone', 'ping'],
+            ['Nettoyer à la fermeture', 'clear'],
+            ['Voir la configuration', 'summary']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    return container({
+      title:
+        'Configuration • Sessions RP',
+
+      description:
+        [
+          `**Salon :** ${
+            config.channels.sessions
+              ? `<#${config.channels.sessions}>`
+              : 'Même salon que la commande'
+          }`,
+          '',
+          `**Ping @everyone :** ${
+            config.sessions.autoPingEveryone
+              ? '🟢'
+              : '🔴'
+          }`,
+          `**Nettoyage shutdown :** ${
+            config.sessions.clearOnShutdown
+              ? '🟢'
+              : '🔴'
+          }`,
+          '',
+          'Le panneau d’ouverture n’a volontairement aucun bouton.'
+        ].join('\n'),
+
+      accent:
+        config.appearance.successColor,
+
+      rows: [
+        new ActionRowBuilder()
+          .addComponents(
+            menu
+          ),
+        new ActionRowBuilder()
+          .addComponents(
+            back
+          )
+      ],
+
+      footer:
+        'Sessions RP'
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // SYSTEMS
+  // --------------------------------------------------------------------------
+
+  if (
+    category === 'systems'
+  ) {
+    const menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'config_system_target'
+        )
+        .setPlaceholder(
+          'Choisir un système...'
+        )
+        .addOptions(
+          [
+            ['Bienvenue', 'welcome'],
+            ['Règlement', 'rules'],
+            ['Candidatures', 'applications'],
+            ['Giveaways', 'giveaways'],
+            ['Tickets', 'tickets'],
+            ['Suggestions', 'suggestions'],
+            ['Sessions', 'sessions'],
+            ['Sécurité', 'security'],
+            ['Anti-raid', 'antiRaid'],
+            ['Anti-spam', 'antiSpam'],
+            ['Mass mention', 'antiMassMention'],
+            ['Suppression massive', 'antiMassDelete'],
+            ['Mots interdits', 'badWords']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    return container({
+      title:
+        'Configuration • Systèmes',
+
+      description:
+        [
+          'Les systèmes peuvent être ouverts ou fermés individuellement.',
+          '',
+          `Bienvenue : ${boolState(config.systems.welcome)}`,
+          `Règlement : ${boolState(config.systems.rules)}`,
+          `Candidatures : ${boolState(config.systems.applications)}`,
+          `Giveaways : ${boolState(config.systems.giveaways)}`,
+          `Tickets : ${boolState(config.systems.tickets)}`,
+          `Suggestions : ${boolState(config.systems.suggestions)}`,
+          `Sessions : ${boolState(config.systems.sessions)}`,
+          `Sécurité : ${boolState(config.systems.security)}`
+        ].join('\n'),
+
+      accent:
+        config.appearance.accentColor,
+
+      rows: [
+        new ActionRowBuilder()
+          .addComponents(
+            menu
+          ),
+        new ActionRowBuilder()
+          .addComponents(
+            back
+          )
+      ],
+
+      footer:
+        'Activation / fermeture des systèmes'
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // APPEARANCE
+  // --------------------------------------------------------------------------
+
+  if (
+    category === 'appearance'
+  ) {
+    const button =
+      new ButtonBuilder()
+        .setCustomId(
+          'config_change_color'
+        )
+        .setLabel(
+          'Changer la couleur'
+        )
+        .setEmoji('🎨')
+        .setStyle(
+          ButtonStyle.Primary
+        );
+
+    return container({
+      title:
+        'Configuration • Apparence',
+
+      description:
+        [
+          `**Couleur actuelle :** #${config.appearance.accentColor
+            .toString(16)
+            .padStart(6, '0')
+            .toUpperCase()}`,
+          '',
+          'Cette couleur est utilisée comme accent principal des panneaux Components V2.'
+        ].join('\n'),
+
+      accent:
+        config.appearance.accentColor,
+
+      rows: [
+        new ActionRowBuilder()
+          .addComponents(
+            button
+          ),
+        new ActionRowBuilder()
+          .addComponents(
+            back
+          )
+      ],
+
+      footer:
+        'Identité visuelle'
+    });
+  }
+
+  return container({
+    title:
+      'Configuration',
+    description:
+      'Catégorie inconnue.',
+    accent:
+      config.appearance.dangerColor,
+    rows: [
+      new ActionRowBuilder()
+        .addComponents(
+          back
+        )
+    ]
+  });
+}
+
+function boolState(
+  value
+) {
+  return value
+    ? '🟢 Activé'
+    : '🔴 Désactivé';
+}
+
+function formatRoleList(
+  roleIds
+) {
+  if (
+    !roleIds?.length
+  ) {
+    return 'Aucun rôle configuré';
+  }
+
+  return roleIds
+    .map(
+      roleId =>
+        `<@&${roleId}>`
+    )
+    .join(', ');
+}
+
+// ============================================================================
+// CONFIG ROLE PICKER
+// ============================================================================
+
+function buildRolePicker(
+  customId,
+  placeholder,
+  maxValues = 10
+) {
+  return new RoleSelectMenuBuilder()
+    .setCustomId(
+      customId
+    )
+    .setPlaceholder(
+      placeholder
+    )
+    .setMinValues(
+      0
+    )
+    .setMaxValues(
+      maxValues
+    );
+}
+
+// ============================================================================
+// CONFIG CHANNEL PICKER
+// ============================================================================
+
+function buildChannelPicker(
+  customId,
+  placeholder
+) {
+  return new ChannelSelectMenuBuilder()
+    .setCustomId(
+      customId
+    )
+    .setPlaceholder(
+      placeholder
+    )
+    .setMinValues(
+      1
+    )
+    .setMaxValues(
+      1
+    )
+    .setChannelTypes(
+      ChannelType.GuildText,
+      ChannelType.GuildAnnouncement,
+      ChannelType.GuildCategory
+    );
+}
+
+// ============================================================================
+// CONFIG INTERACTION ACCESS
+// ============================================================================
+
+function configAccessAllowed(
+  interaction
+) {
+  const config =
+    getConfig(
+      interaction.guild.id
+    );
+
+  /*
+   * During testing, no role restriction is enforced.
+   */
+  if (
+    config.testMode
+  ) {
+    return true;
+  }
+
+  return roleRestrictionPasses(
+    interaction.member,
+    config,
+    config.roles.config
+  );
+}
+
+function giveawayAccessAllowed(
+  interaction
+) {
+  const config =
+    getConfig(
+      interaction.guild.id
+    );
+
+  /*
+   * During testing, no role restriction is enforced.
+   */
+  if (
+    config.testMode
+  ) {
+    return true;
+  }
+
+  return roleRestrictionPasses(
+    interaction.member,
+    config,
+    config.roles.giveaways
+  );
+}
+
+// ============================================================================
+// READY
+// ============================================================================
+
+client.once(
+  Events.ClientReady,
+  async ready => {
+    console.log('');
+    console.log(
+      '══════════════════════════════════════════════'
+    );
+    console.log(
+      `✅ ${ready.user.tag} est connecté`
+    );
+    console.log(
+      `🏠 Serveurs : ${ready.guilds.cache.size}`
+    );
+    console.log(
+      '🧩 Components V2 : actif'
+    );
+    console.log(
+      '🧠 SQLite : actif'
+    );
+    console.log(
+      '🛡️ Sécurité : actif'
+    );
+    console.log(
+      '🎉 Giveaways : actif'
+    );
+    console.log(
+      '🎫 Tickets multi-types : actif'
+    );
+    console.log(
+      '🇫🇷 Bretagne RP : actif'
+    );
+    console.log(
+      '══════════════════════════════════════════════'
+    );
+    console.log('');
+
+    try {
+      await registerCommands();
+    } catch (
+      error
+    ) {
+      console.error(
+        '❌ Erreur registration commandes:',
+        error
+      );
+    }
+
+    for (
+      const guild of ready.guilds.cache.values()
+    ) {
+      try {
+        await syncAllPanels(
+          guild
+        );
+
+        console.log(
+          `✅ Panels vérifiés : ${guild.name}`
+        );
+      } catch (
+        error
+      ) {
+        console.error(
+          `❌ Panel error (${guild.name}):`,
+          error.message
+        );
+      }
+    }
+
+    /*
+     * Giveaways run every 5 seconds.
+     */
+    setInterval(
+      () =>
+        processGiveaways()
+          .catch(
+            error =>
+              console.error(
+                'Giveaway loop:',
+                error
+              )
+          ),
+      5000
+    );
+  }
+);
+
+// ============================================================================
+// COMMAND REGISTRATION
+// ============================================================================
+
+async function registerCommands() {
+  const rest =
+    new REST({
+      version: '10'
+    }).setToken(
+      TOKEN
+    );
+
+  const body =
+    commands.map(
+      command =>
+        command.toJSON()
+    );
+
+  if (
+    GUILD_ID
+  ) {
+    await rest.put(
+      Routes.applicationGuildCommands(
+        CLIENT_ID,
+        GUILD_ID
+      ),
+      {
+        body
+      }
+    );
+
+    console.log(
+      `✅ Commandes enregistrées sur ${GUILD_ID}`
+    );
+
+    return;
+  }
+
+  await rest.put(
+    Routes.applicationCommands(
+      CLIENT_ID
+    ),
+    {
+      body
+    }
+  );
+
+  console.log(
+    '✅ Commandes globales enregistrées'
+  );
+}
+
+// ============================================================================
+// MAIN INTERACTION HANDLER
+// ============================================================================
+//
+// IMPORTANT:
+// This is intentionally ONE handler.
+// The previous structure split interaction logic over multiple listeners,
+// which made debugging "application did not respond" much harder.
+//
 // ============================================================================
 
 client.on(
@@ -3269,44 +5487,69 @@ client.on(
   async interaction => {
     try {
       // ======================================================================
-      // CHAT INPUT
+      // SLASH COMMANDS
       // ======================================================================
 
       if (
         interaction.isChatInputCommand()
       ) {
         // --------------------------------------------------------------------
-        // CONFIG
+        // /CONFIG
         // --------------------------------------------------------------------
 
         if (
           interaction.commandName ===
           'config'
         ) {
-          const config =
-            getConfig(
-              interaction.guild.id
+          if (
+            !configAccessAllowed(
+              interaction
+            )
+          ) {
+            return textReply(
+              interaction,
+              '❌ Tu n’as pas accès à la configuration.'
             );
+          }
 
-          return interaction.reply({
-            flags:
-              MessageFlags.IsComponentsV2,
-            components: [
-              buildConfigHome(
-                config
+          /*
+           * Immediate response.
+           * This is the important part for the old
+           * "application did not respond" problem.
+           */
+          return v2Reply(
+            interaction,
+            buildConfigHome(
+              getConfig(
+                interaction.guild.id
               )
-            ]
-          });
+            ),
+            false
+          );
         }
 
         // --------------------------------------------------------------------
-        // SUGGESTION
+        // /SUGGESTION
         // --------------------------------------------------------------------
 
         if (
           interaction.commandName ===
           'suggestion'
         ) {
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          if (
+            !config.systems.suggestions
+          ) {
+            return textReply(
+              interaction,
+              '❌ Le système de suggestions est actuellement désactivé.'
+            );
+          }
+
           const modal =
             new ModalBuilder()
               .setCustomId(
@@ -3330,8 +5573,12 @@ client.on(
               .setPlaceholder(
                 'Explique ton idée clairement...'
               )
-              .setRequired(true)
-              .setMaxLength(2000);
+              .setRequired(
+                true
+              )
+              .setMaxLength(
+                2000
+              );
 
           modal.addComponents(
             new ActionRowBuilder()
@@ -3346,44 +5593,68 @@ client.on(
         }
 
         // --------------------------------------------------------------------
-        // GIVEAWAY
+        // /GIVEAWAY
         // --------------------------------------------------------------------
 
         if (
           interaction.commandName ===
           'giveaway'
         ) {
+          if (
+            !giveawayAccessAllowed(
+              interaction
+            )
+          ) {
+            return textReply(
+              interaction,
+              '❌ Tu n’as pas accès à la gestion des giveaways.'
+            );
+          }
+
           const subcommand =
-            interaction.options
-              .getSubcommand();
+            interaction.options.getSubcommand();
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          if (
+            !config.systems.giveaways
+          ) {
+            return textReply(
+              interaction,
+              '❌ Le système de giveaways est désactivé.'
+            );
+          }
+
+          // ------------------------------------------------------------------
+          // CREATE
+          // ------------------------------------------------------------------
 
           if (
             subcommand ===
             'create'
           ) {
             const durationInput =
-              interaction.options
-                .getString(
-                  'duration'
-                );
+              interaction.options.getString(
+                'duration'
+              );
 
             const prize =
-              interaction.options
-                .getString(
-                  'prize'
-                );
+              interaction.options.getString(
+                'prize'
+              );
 
             const winners =
-              interaction.options
-                .getInteger(
-                  'winners'
-                );
+              interaction.options.getInteger(
+                'winners'
+              );
 
             const role =
-              interaction.options
-                .getRole(
-                  'role'
-                );
+              interaction.options.getRole(
+                'role'
+              );
 
             const durationMs =
               parseDuration(
@@ -3391,20 +5662,24 @@ client.on(
               );
 
             if (
-              !durationMs ||
-              durationMs <
-                getConfig(
-                  interaction.guild.id
-                ).giveaways
-                  .minimumDurationSeconds *
-                  1000
+              !durationMs
             ) {
-              return interaction.reply({
-                content:
-                  '❌ Durée invalide. Exemple : `30m`, `2h`, `1d`.',
-                flags:
-                  MessageFlags.Ephemeral
-              });
+              return textReply(
+                interaction,
+                '❌ Durée invalide. Utilise par exemple `30m`, `2h`, `1d`.'
+              );
+            }
+
+            if (
+              durationMs <
+              config.giveaways
+                .minimumDurationSeconds *
+                1000
+            ) {
+              return textReply(
+                interaction,
+                `❌ La durée minimum est de ${config.giveaways.minimumDurationSeconds} secondes.`
+              );
             }
 
             const endAt =
@@ -3422,9 +5697,15 @@ client.on(
                   winners,
                   required_role_id,
                   end_at,
-                  participants
+                  participants,
+                  ended,
+                  status,
+                  current_winner_id,
+                  claim_deadline,
+                  claim_round,
+                  expired_winners
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', NULL, NULL, 0, '[]')
               `).run(
                 interaction.guild.id,
                 interaction.channel.id,
@@ -3437,7 +5718,7 @@ client.on(
                 JSON.stringify([])
               );
 
-            const giveaway =
+            let giveaway =
               db.prepare(`
                 SELECT *
                 FROM giveaways
@@ -3450,7 +5731,8 @@ client.on(
               await interaction.channel.send(
                 v2Message(
                   buildGiveawayPanel(
-                    giveaway
+                    giveaway,
+                    config
                   )
                 )
               );
@@ -3464,23 +5746,35 @@ client.on(
               giveaway.id
             );
 
-            return interaction.reply({
-              content:
-                `✅ Giveaway #${giveaway.id} créé.`,
-              flags:
-                MessageFlags.Ephemeral
-            });
+            giveaway =
+              db.prepare(`
+                SELECT *
+                FROM giveaways
+                WHERE id = ?
+              `).get(
+                giveaway.id
+              );
+
+            await textReply(
+              interaction,
+              `✅ Giveaway #${giveaway.id} créé. Il se terminera <t:${Math.floor(endAt / 1000)}:R>.`
+            );
+
+            return;
           }
+
+          // ------------------------------------------------------------------
+          // END
+          // ------------------------------------------------------------------
 
           if (
             subcommand ===
             'end'
           ) {
             const id =
-              interaction.options
-                .getInteger(
-                  'id'
-                );
+              interaction.options.getInteger(
+                'id'
+              );
 
             const giveaway =
               db.prepare(`
@@ -3493,13 +5787,23 @@ client.on(
                 interaction.guild.id
               );
 
-            if (!giveaway) {
-              return interaction.reply({
-                content:
-                  '❌ Giveaway introuvable.',
-                flags:
-                  MessageFlags.Ephemeral
-              });
+            if (
+              !giveaway
+            ) {
+              return textReply(
+                interaction,
+                '❌ Giveaway introuvable.'
+              );
+            }
+
+            if (
+              giveaway.status !==
+              'active'
+            ) {
+              return textReply(
+                interaction,
+                '❌ Ce giveaway est déjà fermé.'
+              );
             }
 
             db.prepare(`
@@ -3511,21 +5815,79 @@ client.on(
               id
             );
 
-            await finishGiveaway(
-              id
+            await startGiveawayClaimRound(
+              id,
+              false
             );
 
-            return interaction.reply({
-              content:
-                '✅ Giveaway terminé.',
-              flags:
-                MessageFlags.Ephemeral
-            });
+            return textReply(
+              interaction,
+              `✅ Giveaway #${id} terminé.`
+            );
+          }
+
+          // ------------------------------------------------------------------
+          // FORCE REROLL
+          // ------------------------------------------------------------------
+
+          if (
+            subcommand ===
+            'reroll'
+          ) {
+            const id =
+              interaction.options.getInteger(
+                'id'
+              );
+
+            const giveaway =
+              db.prepare(`
+                SELECT *
+                FROM giveaways
+                WHERE id = ?
+                  AND guild_id = ?
+              `).get(
+                id,
+                interaction.guild.id
+              );
+
+            if (
+              !giveaway
+            ) {
+              return textReply(
+                interaction,
+                '❌ Giveaway introuvable.'
+              );
+            }
+
+            if (
+              ![
+                'awaiting_claim',
+                'claimed',
+                'ended'
+              ].includes(
+                giveaway.status
+              )
+            ) {
+              return textReply(
+                interaction,
+                '❌ Ce giveaway ne peut pas encore être reroll.'
+              );
+            }
+
+            await startGiveawayClaimRound(
+              id,
+              true
+            );
+
+            return textReply(
+              interaction,
+              `✅ Reroll du giveaway #${id} lancé.`
+            );
           }
         }
 
         // --------------------------------------------------------------------
-        // SESSION
+        // /SESSION
         // --------------------------------------------------------------------
 
         if (
@@ -3537,19 +5899,30 @@ client.on(
               interaction.guild.id
             );
 
+          if (
+            !config.systems.sessions
+          ) {
+            return textReply(
+              interaction,
+              '❌ Le système de sessions est désactivé.'
+            );
+          }
+
           const subcommand =
-            interaction.options
-              .getSubcommand();
+            interaction.options.getSubcommand();
+
+          // --------------------------------------------------------------
+          // OPEN
+          // --------------------------------------------------------------
 
           if (
             subcommand ===
             'open'
           ) {
             const serverCode =
-              interaction.options
-                .getString(
-                  'server-code'
-                );
+              interaction.options.getString(
+                'server-code'
+              );
 
             const existing =
               db.prepare(`
@@ -3561,13 +5934,13 @@ client.on(
                 interaction.guild.id
               );
 
-            if (existing) {
-              return interaction.reply({
-                content:
-                  '❌ Une session est déjà ouverte.',
-                flags:
-                  MessageFlags.Ephemeral
-              });
+            if (
+              existing
+            ) {
+              return textReply(
+                interaction,
+                '❌ Une session est déjà ouverte.'
+              );
             }
 
             const channel =
@@ -3577,6 +5950,10 @@ client.on(
               ) ||
               interaction.channel;
 
+            /*
+             * Components V2 cannot have content in the same message.
+             * Therefore @everyone is sent immediately before the V2 panel.
+             */
             if (
               config.sessions.autoPingEveryone
             ) {
@@ -3584,17 +5961,38 @@ client.on(
                 content:
                   '@everyone',
                 allowedMentions: {
-                  parse: ['everyone']
+                  parse: [
+                    'everyone'
+                  ]
                 }
               });
             }
 
+            const sessionContainer =
+              container({
+                title:
+                  'Session RP ouverte',
+                description:
+                  [
+                    '## État du serveur',
+                    '',
+                    '**Statut :** 🟢 Ouvert',
+                    '',
+                    `**Code serveur :** \`${serverCode}\``,
+                    '',
+                    'La session RP est officiellement ouverte.',
+                    '',
+                    'Bienvenue en jeu.'
+                  ].join('\n'),
+                accent:
+                  config.appearance.successColor,
+                footer:
+                  `${config.serverName} • Session ouverte`
+              });
+
             await channel.send(
               v2Message(
-                buildSessionOpen(
-                  config,
-                  serverCode
-                )
+                sessionContainer
               )
             );
 
@@ -3614,13 +6012,15 @@ client.on(
               Date.now()
             );
 
-            return interaction.reply({
-              content:
-                '✅ Session RP ouverte.',
-              flags:
-                MessageFlags.Ephemeral
-            });
+            return textReply(
+              interaction,
+              `✅ Session RP ouverte dans ${channel}.`
+            );
           }
+
+          // --------------------------------------------------------------
+          // SHUTDOWN
+          // --------------------------------------------------------------
 
           if (
             subcommand ===
@@ -3636,13 +6036,13 @@ client.on(
                 interaction.guild.id
               );
 
-            if (!session) {
-              return interaction.reply({
-                content:
-                  '❌ Aucune session active.',
-                flags:
-                  MessageFlags.Ephemeral
-              });
+            if (
+              !session
+            ) {
+              return textReply(
+                interaction,
+                '❌ Aucune session active.'
+              );
             }
 
             const channel =
@@ -3651,18 +6051,25 @@ client.on(
                 session.channel_id
               );
 
-            if (!channel) {
-              return interaction.reply({
-                content:
-                  '❌ Salon de session introuvable.',
-                flags:
-                  MessageFlags.Ephemeral
-              });
+            if (
+              !channel
+            ) {
+              db.prepare(`
+                UPDATE sessions
+                SET active = 0
+                WHERE guild_id = ?
+              `).run(
+                interaction.guild.id
+              );
+
+              return textReply(
+                interaction,
+                '⚠️ Le salon de la session n’est plus accessible.'
+              );
             }
 
             if (
-              config.sessions
-                .clearOnShutdown
+              config.sessions.clearOnShutdown
             ) {
               await clearChannel(
                 channel
@@ -3671,9 +6078,24 @@ client.on(
 
             await channel.send(
               v2Message(
-                buildSessionClosed(
-                  config
-                )
+                container({
+                  title:
+                    'Session RP fermée',
+                  description:
+                    [
+                      '## État du serveur',
+                      '',
+                      '**Statut :** 🔴 Fermé',
+                      '',
+                      'La session RP est maintenant terminée.',
+                      '',
+                      'Aucun ping n’est envoyé lors de la fermeture.'
+                    ].join('\n'),
+                  accent:
+                    config.appearance.dangerColor,
+                  footer:
+                    `${config.serverName} • Session fermée`
+                })
               )
             );
 
@@ -3685,12 +6107,10 @@ client.on(
               interaction.guild.id
             );
 
-            return interaction.reply({
-              content:
-                '✅ Session RP fermée.',
-              flags:
-                MessageFlags.Ephemeral
-            });
+            return textReply(
+              interaction,
+              '✅ Session RP fermée.'
+            );
           }
         }
       }
@@ -3711,29 +6131,53 @@ client.on(
           'application_menu'
         ) {
           if (
-            interaction.values[0] ===
+            interaction.values[0] !==
             'staff'
           ) {
-            try {
-              await startApplication(
-                interaction.user,
-                interaction.guild.id
-              );
+            return;
+          }
 
-              return interaction.reply({
-                content:
-                  '✅ Je viens de t’envoyer un DM pour commencer ta candidature.',
-                flags:
-                  MessageFlags.Ephemeral
-              });
-            } catch {
-              return interaction.reply({
-                content:
-                  '❌ Je ne peux pas t’envoyer de DM. Active tes messages privés puis réessaie.',
-                flags:
-                  MessageFlags.Ephemeral
-              });
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          if (
+            !config.systems.applications
+          ) {
+            return textReply(
+              interaction,
+              '❌ Les candidatures Staff sont actuellement fermées.'
+            );
+          }
+
+          try {
+            await startApplication(
+              interaction.user,
+              interaction.guild.id
+            );
+
+            return textReply(
+              interaction,
+              '✅ Je viens de t’envoyer un DM pour commencer ta candidature.'
+            );
+          } catch (
+            error
+          ) {
+            if (
+              error.message ===
+              'APPLICATIONS_CLOSED'
+            ) {
+              return textReply(
+                interaction,
+                '❌ Les candidatures sont actuellement fermées.'
+              );
             }
+
+            return textReply(
+              interaction,
+              '❌ Je ne peux pas t’envoyer de DM. Vérifie que tes messages privés sont ouverts.'
+            );
           }
         }
 
@@ -3745,24 +6189,31 @@ client.on(
           interaction.customId ===
           'ticket_menu'
         ) {
-          if (
-            interaction.values[0] ===
-            'open'
-          ) {
-            return createTicket(
-              interaction
-            );
-          }
+          return createTicket(
+            interaction,
+            interaction.values[0]
+          );
         }
 
         // --------------------------------------------------------------------
-        // CONFIG HOME
+        // CONFIG CATEGORY
         // --------------------------------------------------------------------
 
         if (
           interaction.customId ===
           'config_category'
         ) {
+          if (
+            !configAccessAllowed(
+              interaction
+            )
+          ) {
+            return textReply(
+              interaction,
+              '❌ Tu n’as plus accès à la configuration.'
+            );
+          }
+
           const config =
             getConfig(
               interaction.guild.id
@@ -3771,8 +6222,9 @@ client.on(
           return interaction.update({
             flags:
               MessageFlags.IsComponentsV2,
+
             components: [
-              buildConfigCategory(
+              configCategoryView(
                 config,
                 interaction.values[0]
               )
@@ -3781,28 +6233,1258 @@ client.on(
         }
 
         // --------------------------------------------------------------------
-        // CONFIG OPTIONS
+        // CONFIG CHANNEL TARGET
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_channel_target'
+        ) {
+          const target =
+            interaction.values[0];
+
+          return interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              container({
+                title:
+                  'Choisir un salon',
+                description:
+                  [
+                    `Paramètre : **${target}**`,
+                    '',
+                    'Sélectionne maintenant le salon à utiliser.'
+                  ].join('\n'),
+                accent:
+                  0x5865F2,
+
+                rows: [
+                  new ActionRowBuilder()
+                    .addComponents(
+                      buildChannelPicker(
+                        `config_channel_value:${target}`,
+                        'Choisir un salon...'
+                      )
+                    )
+                ],
+
+                footer:
+                  'Le changement est enregistré immédiatement.'
+              })
+            ]
+          });
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG CHANNEL VALUE
         // --------------------------------------------------------------------
 
         if (
           interaction.customId.startsWith(
-            'config_option:'
+            'config_channel_value:'
           )
         ) {
-          const category =
+          const target =
+            interaction.customId
+              .split(':')[1];
+
+          const channelId =
+            interaction.values[0];
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          config.channels[
+            target
+          ] =
+            channelId;
+
+          /*
+           * Ticket category aliases map into the nested ticket config too.
+           */
+          if (
+            target ===
+            'ticketCategorySupport'
+          ) {
+            config.tickets.support.categoryId =
+              channelId;
+          }
+
+          if (
+            target ===
+            'ticketCategoryGiveawayClaim'
+          ) {
+            config.tickets.giveawayClaim.categoryId =
+              channelId;
+          }
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          await interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              configCategoryView(
+                config,
+                'channels'
+              )
+            ]
+          });
+
+          await syncAllPanels(
+            interaction.guild
+          );
+
+          return;
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG ROLE TARGET
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_role_target'
+        ) {
+          const target =
+            interaction.values[0];
+
+          return interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              container({
+                title:
+                  'Choisir un rôle',
+                description:
+                  [
+                    `Paramètre : **${target}**`,
+                    '',
+                    'Sélectionne le rôle à utiliser.'
+                  ].join('\n'),
+
+                accent:
+                  0x5865F2,
+
+                rows: [
+                  new ActionRowBuilder()
+                    .addComponents(
+                      new RoleSelectMenuBuilder()
+                        .setCustomId(
+                          `config_role_value:${target}`
+                        )
+                        .setPlaceholder(
+                          'Choisir un rôle...'
+                        )
+                        .setMinValues(
+                          1
+                        )
+                        .setMaxValues(
+                          1
+                        )
+                    )
+                ],
+
+                footer:
+                  'Le changement est enregistré immédiatement.'
+              })
+            ]
+          });
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG ROLE VALUE
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId.startsWith(
+            'config_role_value:'
+          )
+        ) {
+          const target =
+            interaction.customId
+              .split(':')[1];
+
+          const roleId =
+            interaction.values[0];
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          config.roles[
+            target
+          ] =
+            roleId;
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          return interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              configCategoryView(
+                config,
+                'roles'
+              )
+            ]
+          });
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG SECURITY TARGET
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_security_target'
+        ) {
+          const target =
+            interaction.values[0];
+
+          if (
+            target ===
+            'bypass'
+          ) {
+            return interaction.update({
+              flags:
+                MessageFlags.IsComponentsV2,
+
+              components: [
+                container({
+                  title:
+                    'Sécurité • Rôle bypass',
+                  description:
+                    [
+                      'Sélectionne les rôles pouvant bypass un système.',
+                      '',
+                      'Le système concerné est demandé juste après.'
+                    ].join('\n'),
+
+                  accent:
+                    0xED4245,
+
+                  rows: [
+                    new ActionRowBuilder()
+                      .addComponents(
+                        new StringSelectMenuBuilder()
+                          .setCustomId(
+                            'config_bypass_system'
+                          )
+                          .setPlaceholder(
+                            'Choisir le système...'
+                          )
+                          .addOptions(
+                            [
+                              ['Mots interdits', 'badWords'],
+                              ['Anti-spam', 'antiSpam'],
+                              ['Anti-raid', 'antiRaid'],
+                              ['Mass mention', 'antiMassMention'],
+                              ['Suppression massive', 'antiMassDelete']
+                            ].map(
+                              ([label, value]) =>
+                                new StringSelectMenuOptionBuilder()
+                                  .setLabel(label)
+                                  .setValue(value)
+                            )
+                          )
+                      )
+                  ],
+
+                  footer:
+                    'Les rôles bypass sont configurables individuellement.'
+                })
+              ]
+            });
+          }
+
+          const map = {
+            antiRaid:
+              'systems.antiRaid',
+            antiSpam:
+              'systems.antiSpam',
+            antiMassMention:
+              'systems.antiMassMention',
+            antiMassDelete:
+              'systems.antiMassDelete',
+            badWords:
+              'systems.badWords'
+          };
+
+          const path =
+            map[target];
+
+          const current =
+            getNested(
+              getConfig(
+                interaction.guild.id
+              ),
+              path
+            );
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          setNested(
+            config,
+            path,
+            !current
+          );
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          return interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              configCategoryView(
+                config,
+                'security'
+              )
+            ]
+          });
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG BYPASS SYSTEM
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_bypass_system'
+        ) {
+          const system =
+            interaction.values[0];
+
+          return interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              container({
+                title:
+                  `Bypass • ${system}`,
+
+                description:
+                  [
+                    `Choisis les rôles qui peuvent bypass **${system}**.`,
+                    '',
+                    'Tu peux sélectionner plusieurs rôles.'
+                  ].join('\n'),
+
+                accent:
+                  0xED4245,
+
+                rows: [
+                  new ActionRowBuilder()
+                    .addComponents(
+                      buildRolePicker(
+                        `config_bypass_roles:${system}`,
+                        'Sélectionner les rôles bypass...'
+                      )
+                    )
+                ],
+
+                footer:
+                  'Les rôles sélectionnés remplacent l’ancienne liste.'
+              })
+            ]
+          });
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG APPLICATION TARGET
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_application_target'
+        ) {
+          const target =
+            interaction.values[0];
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          if (
+            target ===
+            'toggle'
+          ) {
+            config.systems.applications =
+              !config.systems.applications;
+
+            saveConfig(
+              interaction.guild.id,
+              config
+            );
+
+            await interaction.update({
+              flags:
+                MessageFlags.IsComponentsV2,
+
+              components: [
+                configCategoryView(
+                  config,
+                  'applications'
+                )
+              ]
+            });
+
+            await syncAllPanels(
+              interaction.guild
+            );
+
+            return;
+          }
+
+          if (
+            target ===
+            'questions'
+          ) {
+            return interaction.update({
+              flags:
+                MessageFlags.IsComponentsV2,
+
+              components: [
+                container({
+                  title:
+                    'Questions de candidature',
+                  description:
+                    config.applications.questions
+                      .map(
+                        (question, index) =>
+                          `**${index + 1}.** ${question}`
+                      )
+                      .join('\n\n') ||
+                    'Aucune question.',
+
+                  accent:
+                    config.appearance.accentColor
+                })
+              ]
+            });
+          }
+
+          if (
+            target ===
+            'add'
+          ) {
+            const modal =
+              new ModalBuilder()
+                .setCustomId(
+                  'config_add_question'
+                )
+                .setTitle(
+                  'Ajouter une question'
+                );
+
+            const input =
+              new TextInputBuilder()
+                .setCustomId(
+                  'question'
+                )
+                .setLabel(
+                  'Question'
+                )
+                .setStyle(
+                  TextInputStyle.Paragraph
+                )
+                .setRequired(
+                  true
+                )
+                .setMaxLength(
+                  1000
+                );
+
+            modal.addComponents(
+              new ActionRowBuilder()
+                .addComponents(
+                  input
+                )
+            );
+
+            return interaction.showModal(
+              modal
+            );
+          }
+
+          if (
+            target ===
+            'remove'
+          ) {
+            const modal =
+              new ModalBuilder()
+                .setCustomId(
+                  'config_remove_question'
+                )
+                .setTitle(
+                  'Supprimer une question'
+                );
+
+            const input =
+              new TextInputBuilder()
+                .setCustomId(
+                  'index'
+                )
+                .setLabel(
+                  'Numéro de question'
+                )
+                .setStyle(
+                  TextInputStyle.Short
+                )
+                .setRequired(
+                  true
+                )
+                .setPlaceholder(
+                  'Exemple : 3'
+                );
+
+            modal.addComponents(
+              new ActionRowBuilder()
+                .addComponents(
+                  input
+                )
+            );
+
+            return interaction.showModal(
+              modal
+            );
+          }
+
+          if (
+            target ===
+            'staffRole'
+          ) {
+            const role =
+              await getRole(
+                interaction.guild,
+                config.roles.staff
+              );
+
+            return interaction.update({
+              flags:
+                MessageFlags.IsComponentsV2,
+
+              components: [
+                container({
+                  title:
+                    'Rôle Staff après acceptation',
+                  description:
+                    [
+                      `Rôle actuel : ${
+                        role
+                          ? `<@&${role.id}>`
+                          : 'Aucun'
+                      }`,
+                      '',
+                      'Choisis le rôle qui sera automatiquement attribué lorsqu’une candidature est acceptée.'
+                    ].join('\n'),
+
+                  accent:
+                    config.appearance.accentColor,
+
+                  rows: [
+                    new ActionRowBuilder()
+                      .addComponents(
+                        new RoleSelectMenuBuilder()
+                          .setCustomId(
+                            'config_staff_role'
+                          )
+                          .setPlaceholder(
+                            'Choisir le rôle Staff...'
+                          )
+                          .setMinValues(
+                            1
+                          )
+                          .setMaxValues(
+                            1
+                          )
+                      ]
+                  ]
+                })
+              ]
+            });
+          }
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG TICKET TARGET
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_ticket_target'
+        ) {
+          const target =
+            interaction.values[0];
+
+          const names = {
+            support_view:
+              'Support • Voir',
+            support_ping:
+              'Support • Ping',
+            claim_view:
+              'Giveaway • Voir',
+            claim_ping:
+              'Giveaway • Ping'
+          };
+
+          if (
+            target ===
+            'delete'
+          ) {
+            const config =
+              getConfig(
+                interaction.guild.id
+              );
+
+            config.tickets.deleteAfterClose =
+              !config.tickets.deleteAfterClose;
+
+            saveConfig(
+              interaction.guild.id,
+              config
+            );
+
+            return interaction.update({
+              flags:
+                MessageFlags.IsComponentsV2,
+
+              components: [
+                configCategoryView(
+                  config,
+                  'tickets'
+                )
+              ]
+            });
+          }
+
+          if (
+            target ===
+            'support_category' ||
+            target ===
+            'claim_category'
+          ) {
+            const realTarget =
+              target ===
+              'support_category'
+                ? 'ticketCategorySupport'
+                : 'ticketCategoryGiveawayClaim';
+
+            return interaction.update({
+              flags:
+                MessageFlags.IsComponentsV2,
+
+              components: [
+                container({
+                  title:
+                    'Catégorie de tickets',
+                  description:
+                    [
+                      `Paramètre : **${target}**`,
+                      '',
+                      'Sélectionne la catégorie Discord à utiliser.'
+                    ].join('\n'),
+
+                  accent:
+                    configCategoryColor(
+                      interaction.guild.id
+                    ),
+
+                  rows: [
+                    new ActionRowBuilder()
+                      .addComponents(
+                        new ChannelSelectMenuBuilder()
+                          .setCustomId(
+                            `config_ticket_category_value:${realTarget}`
+                          )
+                          .setPlaceholder(
+                            'Choisir une catégorie...'
+                          )
+                          .setMinValues(
+                            1
+                          )
+                          .setMaxValues(
+                            1
+                          )
+                          .setChannelTypes(
+                            ChannelType.GuildCategory
+                          )
+                      ]
+                  ]
+                })
+              ]
+            });
+          }
+
+          return interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              container({
+                title:
+                  `Tickets • ${names[target] || target}`,
+
+                description:
+                  [
+                    target.includes('view')
+                      ? 'Choisis les rôles qui pourront voir ce type de ticket.'
+                      : 'Choisis les rôles qui recevront le ping lors de la création de ce type de ticket.',
+                    '',
+                    target.startsWith(
+                      'support'
+                    )
+                      ? '**Type :** Support'
+                      : '**Type :** Giveaway • Réclamation'
+                  ].join('\n'),
+
+                accent:
+                  configCategoryColor(
+                    interaction.guild.id
+                  ),
+
+                rows: [
+                  new ActionRowBuilder()
+                    .addComponents(
+                      buildRolePicker(
+                        `config_ticket_roles:${target}`,
+                        target.includes('view')
+                          ? 'Rôles autorisés à voir...'
+                          : 'Rôles qui seront ping...'
+                      )
+                    )
+                ]
+              })
+            ]
+          });
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG GIVEAWAY TARGET
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_giveaway_target'
+        ) {
+          const target =
+            interaction.values[0];
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          if (
+            target ===
+            'summary'
+          ) {
+            return interaction.update({
+              flags:
+                MessageFlags.IsComponentsV2,
+
+              components: [
+                configCategoryView(
+                  config,
+                  'giveaways'
+                )
+              ]
+            });
+          }
+
+          if (
+            target ===
+            'role'
+          ) {
+            return interaction.update({
+              flags:
+                MessageFlags.IsComponentsV2,
+
+              components: [
+                container({
+                  title:
+                    'Rôle Giveaway',
+                  description:
+                    [
+                      `Rôle actuel : ${
+                        config.roles.giveaways
+                          ? `<@&${config.roles.giveaways}>`
+                          : 'Aucun'
+                      }`,
+                      '',
+                      'Sélectionne le rôle pouvant gérer les giveaways lorsque le mode test sera désactivé.'
+                    ].join('\n'),
+
+                  accent:
+                    config.appearance.warningColor,
+
+                  rows: [
+                    new ActionRowBuilder()
+                      .addComponents(
+                        new RoleSelectMenuBuilder()
+                          .setCustomId(
+                            'config_giveaway_role'
+                          )
+                          .setPlaceholder(
+                            'Choisir le rôle...'
+                          )
+                          .setMinValues(
+                            1
+                          )
+                          .setMaxValues(
+                            1
+                          )
+                      ]
+                  ]
+                })
+              ]
+            });
+          }
+
+          if (
+            target ===
+            'claim_hours'
+          ) {
+            const modal =
+              new ModalBuilder()
+                .setCustomId(
+                  'config_claim_hours'
+                )
+                .setTitle(
+                  'Durée de réclamation'
+                );
+
+            const input =
+              new TextInputBuilder()
+                .setCustomId(
+                  'hours'
+                )
+                .setLabel(
+                  'Heures'
+                )
+                .setStyle(
+                  TextInputStyle.Short
+                )
+                .setPlaceholder(
+                  '24'
+                )
+                .setRequired(
+                  true
+                );
+
+            modal.addComponents(
+              new ActionRowBuilder()
+                .addComponents(
+                  input
+                )
+            );
+
+            return interaction.showModal(
+              modal
+            );
+          }
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG SESSIONS TARGET
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_session_target'
+        ) {
+          const target =
+            interaction.values[0];
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          if (
+            target ===
+            'ping'
+          ) {
+            config.sessions.autoPingEveryone =
+              !config.sessions.autoPingEveryone;
+
+            saveConfig(
+              interaction.guild.id,
+              config
+            );
+
+            return interaction.update({
+              flags:
+                MessageFlags.IsComponentsV2,
+
+              components: [
+                configCategoryView(
+                  config,
+                  'sessions'
+                )
+              ]
+            });
+          }
+
+          if (
+            target ===
+            'clear'
+          ) {
+            config.sessions.clearOnShutdown =
+              !config.sessions.clearOnShutdown;
+
+            saveConfig(
+              interaction.guild.id,
+              config
+            );
+
+            return interaction.update({
+              flags:
+                MessageFlags.IsComponentsV2,
+
+              components: [
+                configCategoryView(
+                  config,
+                  'sessions'
+                )
+              ]
+            });
+          }
+
+          return;
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG SYSTEM TARGET
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_system_target'
+        ) {
+          const target =
+            interaction.values[0];
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          config.systems[
+            target
+          ] =
+            !config.systems[
+              target
+            ];
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          await interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              configCategoryView(
+                config,
+                'systems'
+              )
+            ]
+          });
+
+          await syncAllPanels(
+            interaction.guild
+          );
+
+          return;
+        }
+      }
+
+      // ======================================================================
+      // CHANNEL SELECTS
+      // ======================================================================
+
+      if (
+        interaction.isChannelSelectMenu()
+      ) {
+        if (
+          interaction.customId.startsWith(
+            'config_ticket_category_value:'
+          )
+        ) {
+          const target =
             interaction.customId
               .split(':')[1];
 
           const value =
             interaction.values[0];
 
-          await handleConfigOption(
-            interaction,
-            category,
-            value
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          if (
+            target ===
+            'ticketCategorySupport'
+          ) {
+            config.channels
+              .ticketCategorySupport =
+              value;
+
+            config.tickets.support
+              .categoryId =
+              value;
+          }
+
+          if (
+            target ===
+            'ticketCategoryGiveawayClaim'
+          ) {
+            config.channels
+              .ticketCategoryGiveawayClaim =
+              value;
+
+            config.tickets
+              .giveawayClaim
+              .categoryId =
+              value;
+          }
+
+          saveConfig(
+            interaction.guild.id,
+            config
           );
 
-          return;
+          return interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              configCategoryView(
+                config,
+                'tickets'
+              )
+            ]
+          });
+        }
+      }
+
+      // ======================================================================
+      // ROLE SELECTS
+      // ======================================================================
+
+      if (
+        interaction.isRoleSelectMenu()
+      ) {
+        // --------------------------------------------------------------------
+        // SECURITY BYPASS
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId.startsWith(
+            'config_bypass_roles:'
+          )
+        ) {
+          const system =
+            interaction.customId
+              .split(':')[1];
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          config.bypassRoles[
+            system
+          ] =
+            [...interaction.values];
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          return interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              configCategoryView(
+                config,
+                'security'
+              )
+            ]
+          });
+        }
+
+        // --------------------------------------------------------------------
+        // TICKET ROLES
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId.startsWith(
+            'config_ticket_roles:'
+          )
+        ) {
+          const target =
+            interaction.customId
+              .split(':')[1];
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          if (
+            target ===
+            'support_view'
+          ) {
+            config.tickets
+              .support
+              .viewRoleIds =
+              [...interaction.values];
+          }
+
+          if (
+            target ===
+            'support_ping'
+          ) {
+            config.tickets
+              .support
+              .pingRoleIds =
+              [...interaction.values];
+          }
+
+          if (
+            target ===
+            'claim_view'
+          ) {
+            config.tickets
+              .giveawayClaim
+              .viewRoleIds =
+              [...interaction.values];
+          }
+
+          if (
+            target ===
+            'claim_ping'
+          ) {
+            config.tickets
+              .giveawayClaim
+              .pingRoleIds =
+              [...interaction.values];
+          }
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          return interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              configCategoryView(
+                config,
+                'tickets'
+              )
+            ]
+          });
+        }
+
+        // --------------------------------------------------------------------
+        // STAFF ROLE
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_staff_role'
+        ) {
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          config.roles.staff =
+            interaction.values[0];
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          return interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              configCategoryView(
+                config,
+                'applications'
+              )
+            ]
+          });
+        }
+
+        // --------------------------------------------------------------------
+        // GIVEAWAY ROLE
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_giveaway_role'
+        ) {
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          config.roles.giveaways =
+            interaction.values[0];
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          return interaction.update({
+            flags:
+              MessageFlags.IsComponentsV2,
+
+            components: [
+              configCategoryView(
+                config,
+                'giveaways'
+              )
+            ]
+          });
         }
       }
 
@@ -3814,13 +7496,24 @@ client.on(
         interaction.isButton()
       ) {
         // --------------------------------------------------------------------
-        // CONFIG REFRESH
+        // CONFIG
         // --------------------------------------------------------------------
 
         if (
           interaction.customId ===
           'config_refresh'
         ) {
+          if (
+            !configAccessAllowed(
+              interaction
+            )
+          ) {
+            return textReply(
+              interaction,
+              '❌ Tu n’as plus accès à la configuration.'
+            );
+          }
+
           const config =
             getConfig(
               interaction.guild.id
@@ -3829,6 +7522,7 @@ client.on(
           return interaction.update({
             flags:
               MessageFlags.IsComponentsV2,
+
             components: [
               buildConfigHome(
                 config
@@ -3836,10 +7530,6 @@ client.on(
             ]
           });
         }
-
-        // --------------------------------------------------------------------
-        // CONFIG BACK
-        // --------------------------------------------------------------------
 
         if (
           interaction.customId ===
@@ -3853,12 +7543,56 @@ client.on(
           return interaction.update({
             flags:
               MessageFlags.IsComponentsV2,
+
             components: [
               buildConfigHome(
                 config
               )
             ]
           });
+        }
+
+        if (
+          interaction.customId ===
+          'config_change_color'
+        ) {
+          const modal =
+            new ModalBuilder()
+              .setCustomId(
+                'config_color_modal'
+              )
+              .setTitle(
+                'Changer la couleur'
+              );
+
+          const input =
+            new TextInputBuilder()
+              .setCustomId(
+                'hex'
+              )
+              .setLabel(
+                'Couleur HEX'
+              )
+              .setPlaceholder(
+                '#5865F2'
+              )
+              .setStyle(
+                TextInputStyle.Short
+              )
+              .setRequired(
+                true
+              );
+
+          modal.addComponents(
+            new ActionRowBuilder()
+              .addComponents(
+                input
+              )
+          );
+
+          return interaction.showModal(
+            modal
+          );
         }
 
         // --------------------------------------------------------------------
@@ -3877,30 +7611,25 @@ client.on(
           if (
             !config.roles.verified
           ) {
-            return interaction.reply({
-              content:
-                '❌ Aucun rôle vérifié n’est configuré.',
-              flags:
-                MessageFlags.Ephemeral
-            });
+            return textReply(
+              interaction,
+              '❌ Aucun rôle de validation n’est configuré.'
+            );
           }
 
           const role =
-            await interaction.guild.roles
-              .fetch(
-                config.roles.verified
-              )
-              .catch(
-                () => null
-              );
+            await getRole(
+              interaction.guild,
+              config.roles.verified
+            );
 
-          if (!role) {
-            return interaction.reply({
-              content:
-                '❌ Le rôle configuré est introuvable.',
-              flags:
-                MessageFlags.Ephemeral
-            });
+          if (
+            !role
+          ) {
+            return textReply(
+              interaction,
+              '❌ Le rôle configuré est introuvable.'
+            );
           }
 
           try {
@@ -3909,19 +7638,15 @@ client.on(
               'Acceptation du règlement'
             );
 
-            return interaction.reply({
-              content:
-                `✅ Règlement accepté. Tu as reçu ${role}.`,
-              flags:
-                MessageFlags.Ephemeral
-            });
+            return textReply(
+              interaction,
+              `✅ Règlement accepté. Tu as reçu ${role}.`
+            );
           } catch {
-            return interaction.reply({
-              content:
-                '❌ Je ne peux pas attribuer ce rôle. Vérifie la position du rôle du bot.',
-              flags:
-                MessageFlags.Ephemeral
-            });
+            return textReply(
+              interaction,
+              '❌ Je ne peux pas attribuer ce rôle. Vérifie la position du rôle du bot.'
+            );
           }
         }
 
@@ -3952,32 +7677,38 @@ client.on(
               interaction.user.id
             );
 
-          if (!application) {
-            return interaction.reply({
-              content:
-                '❌ Cette candidature n’est plus disponible.',
-              flags:
-                MessageFlags.Ephemeral
-            });
+          if (
+            !application
+          ) {
+            return textReply(
+              interaction,
+              '❌ Cette candidature n’est plus disponible.'
+            );
           }
 
           await interaction.update({
             flags:
               MessageFlags.IsComponentsV2,
+
             components: [
               container({
                 title:
                   'Candidature démarrée',
                 description:
-                  'Très bien.\n\n' +
-                  'Réponds à chaque question directement dans ce DM.',
+                  [
+                    'Parfait.',
+                    '',
+                    'Nous commençons maintenant.',
+                    '',
+                    'Réponds à chaque question directement dans ce DM.'
+                  ].join('\n'),
                 accent:
                   0x57F287
               })
             ]
           });
 
-          await askNextApplicationQuestion(
+          await askApplicationQuestion(
             application
           );
 
@@ -3985,7 +7716,7 @@ client.on(
         }
 
         // --------------------------------------------------------------------
-        // APPLICATION DECISION
+        // APPLICATION ACCEPT / REFUSE
         // --------------------------------------------------------------------
 
         if (
@@ -4001,7 +7732,7 @@ client.on(
               'application_accept:'
             );
 
-          const id =
+          const applicationId =
             Number(
               interaction.customId
                 .split(':')[1]
@@ -4010,7 +7741,7 @@ client.on(
           const modal =
             new ModalBuilder()
               .setCustomId(
-                `application_decision:${accepted ? 'accept' : 'refuse'}:${id}`
+                `application_decision:${accepted ? 'accept' : 'refuse'}:${applicationId}`
               )
               .setTitle(
                 accepted
@@ -4021,19 +7752,20 @@ client.on(
           const reason =
             new TextInputBuilder()
               .setCustomId(
-                'decision_reason'
+                'reason'
               )
               .setLabel(
-                'Raison'
+                'Pourquoi ?'
               )
               .setStyle(
                 TextInputStyle.Paragraph
               )
-              .setPlaceholder(
-                'Explique la décision...'
+              .setRequired(
+                true
               )
-              .setRequired(true)
-              .setMaxLength(1000);
+              .setMaxLength(
+                1000
+              );
 
           modal.addComponents(
             new ActionRowBuilder()
@@ -4056,7 +7788,7 @@ client.on(
             'giveaway_join:'
           )
         ) {
-          const id =
+          const giveawayId =
             Number(
               interaction.customId
                 .split(':')[1]
@@ -4067,56 +7799,51 @@ client.on(
               SELECT *
               FROM giveaways
               WHERE id = ?
-            `).get(id);
+            `).get(
+              giveawayId
+            );
 
           if (
             !giveaway ||
-            giveaway.ended
+            giveaway.status !==
+              'active'
           ) {
-            return interaction.reply({
-              content:
-                '❌ Ce giveaway est terminé.',
-              flags:
-                MessageFlags.Ephemeral
-            });
+            return textReply(
+              interaction,
+              '❌ Ce giveaway est fermé.'
+            );
           }
 
           if (
             giveaway.end_at <=
             Date.now()
           ) {
-            await finishGiveaway(
-              giveaway.id
+            await startGiveawayClaimRound(
+              giveaway.id,
+              false
             );
 
-            return interaction.reply({
-              content:
-                '❌ Ce giveaway vient de se terminer.',
-              flags:
-                MessageFlags.Ephemeral
-            });
+            return textReply(
+              interaction,
+              '❌ Ce giveaway vient de se terminer.'
+            );
           }
-
-          const member =
-            interaction.member;
 
           if (
             giveaway.required_role_id &&
-            !member.roles.cache.has(
+            !interaction.member.roles.cache.has(
               giveaway.required_role_id
             )
           ) {
-            return interaction.reply({
-              content:
-                `❌ Tu dois avoir <@&${giveaway.required_role_id}> pour participer.`,
-              flags:
-                MessageFlags.Ephemeral
-            });
+            return textReply(
+              interaction,
+              `❌ Tu dois avoir <@&${giveaway.required_role_id}> pour participer.`
+            );
           }
 
           const participants =
-            JSON.parse(
-              giveaway.participants
+            getGiveawayParticipants(
+              giveaway
             );
 
           if (
@@ -4124,12 +7851,10 @@ client.on(
               interaction.user.id
             )
           ) {
-            return interaction.reply({
-              content:
-                '⚠️ Tu participes déjà à ce giveaway. Utilise **Quitter** pour te retirer.',
-              flags:
-                MessageFlags.Ephemeral
-            });
+            return textReply(
+              interaction,
+              '⚠️ Tu participes déjà à ce giveaway. Utilise **Quitter** si tu veux te retirer.'
+            );
           }
 
           participants.push(
@@ -4144,7 +7869,7 @@ client.on(
             JSON.stringify(
               participants
             ),
-            id
+            giveaway.id
           );
 
           const updated =
@@ -4152,18 +7877,18 @@ client.on(
               SELECT *
               FROM giveaways
               WHERE id = ?
-            `).get(id);
+            `).get(
+              giveaway.id
+            );
 
-          await updateGiveaway(
+          await updateGiveawayMessage(
             updated
           );
 
-          return interaction.reply({
-            content:
-              '🎉 Tu participes maintenant au giveaway !',
-            flags:
-              MessageFlags.Ephemeral
-          });
+          return textReply(
+            interaction,
+            '🎉 Tu participes maintenant au giveaway !'
+          );
         }
 
         // --------------------------------------------------------------------
@@ -4175,7 +7900,7 @@ client.on(
             'giveaway_leave:'
           )
         ) {
-          const id =
+          const giveawayId =
             Number(
               interaction.customId
                 .split(':')[1]
@@ -4184,7 +7909,7 @@ client.on(
           const confirm =
             new ButtonBuilder()
               .setCustomId(
-                `giveaway_confirm_leave:${id}`
+                `giveaway_confirm_leave:${giveawayId}`
               )
               .setLabel(
                 'Oui, quitter'
@@ -4199,12 +7924,18 @@ client.on(
               title:
                 'Quitter le giveaway ?',
               description:
-                'Tu participes actuellement à ce giveaway.\n\n' +
-                'Veux-tu vraiment retirer ta participation ?',
+                [
+                  'Tu participes actuellement à ce giveaway.',
+                  '',
+                  'Veux-tu vraiment retirer ta participation ?'
+                ].join('\n'),
               accent:
                 0xED4245,
-              components: [
-                row(confirm)
+              rows: [
+                new ActionRowBuilder()
+                  .addComponents(
+                    confirm
+                  )
               ],
               footer:
                 'Cette confirmation est visible uniquement par toi.'
@@ -4213,12 +7944,16 @@ client.on(
           );
         }
 
+        // --------------------------------------------------------------------
+        // GIVEAWAY CONFIRM LEAVE
+        // --------------------------------------------------------------------
+
         if (
           interaction.customId.startsWith(
             'giveaway_confirm_leave:'
           )
         ) {
-          const id =
+          const giveawayId =
             Number(
               interaction.customId
                 .split(':')[1]
@@ -4229,13 +7964,18 @@ client.on(
               SELECT *
               FROM giveaways
               WHERE id = ?
-            `).get(id);
+            `).get(
+              giveawayId
+            );
 
-          if (!giveaway) {
+          if (
+            !giveaway
+          ) {
             return interaction.update({
               flags:
                 MessageFlags.IsComponentsV2 |
                 MessageFlags.Ephemeral,
+
               components: [
                 container({
                   title:
@@ -4250,14 +7990,13 @@ client.on(
           }
 
           const participants =
-            JSON.parse(
-              giveaway.participants
-            )
-              .filter(
-                userId =>
-                  userId !==
-                  interaction.user.id
-              );
+            getGiveawayParticipants(
+              giveaway
+            ).filter(
+              userId =>
+                userId !==
+                interaction.user.id
+            );
 
           db.prepare(`
             UPDATE giveaways
@@ -4267,7 +8006,7 @@ client.on(
             JSON.stringify(
               participants
             ),
-            id
+            giveawayId
           );
 
           const updated =
@@ -4275,9 +8014,11 @@ client.on(
               SELECT *
               FROM giveaways
               WHERE id = ?
-            `).get(id);
+            `).get(
+              giveawayId
+            );
 
-          await updateGiveaway(
+          await updateGiveawayMessage(
             updated
           );
 
@@ -4285,6 +8026,7 @@ client.on(
             flags:
               MessageFlags.IsComponentsV2 |
               MessageFlags.Ephemeral,
+
             components: [
               container({
                 title:
@@ -4306,96 +8048,33 @@ client.on(
           interaction.customId ===
           'ticket_close'
         ) {
-          const ticket =
-            db.prepare(`
-              SELECT *
-              FROM tickets
-              WHERE channel_id = ?
-                AND closed_at IS NULL
-            `).get(
-              interaction.channel.id
-            );
-
-          if (!ticket) {
-            return interaction.reply({
-              content:
-                '❌ Ce salon n’est pas un ticket actif.',
-              flags:
-                MessageFlags.Ephemeral
-            });
-          }
-
-          const config =
-            getConfig(
-              interaction.guild.id
-            );
-
-          const isOwner =
-            ticket.user_id ===
-            interaction.user.id;
-
-          const isSupport =
-            config.roles.ticketSupport &&
-            interaction.member.roles.cache.has(
-              config.roles.ticketSupport
-            );
-
-          if (
-            !isOwner &&
-            !isSupport &&
-            !interaction.member.permissions.has(
-              PermissionFlagsBits.ManageChannels
-            )
-          ) {
-            return interaction.reply({
-              content:
-                '❌ Tu ne peux pas fermer ce ticket.',
-              flags:
-                MessageFlags.Ephemeral
-            });
-          }
-
-          db.prepare(`
-            UPDATE tickets
-            SET closed_at = ?
-            WHERE channel_id = ?
-          `).run(
-            Date.now(),
-            interaction.channel.id
+          return closeTicket(
+            interaction
           );
-
-          await interaction.reply({
-            content:
-              '🔒 Ticket fermé.',
-            flags:
-              MessageFlags.Ephemeral
-          });
-
-          if (
-            config.tickets.deleteAfterClose
-          ) {
-            setTimeout(
-              () =>
-                interaction.channel
-                  .delete()
-                  .catch(
-                    () => {}
-                  ),
-              1000
-            );
-          }
-
-          return;
         }
 
         // --------------------------------------------------------------------
-        // SUGGESTION BUTTON
+        // SUGGESTION CREATE
         // --------------------------------------------------------------------
 
         if (
           interaction.customId ===
           'suggestion_create'
         ) {
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          if (
+            !config.systems.suggestions
+          ) {
+            return textReply(
+              interaction,
+              '❌ Les suggestions sont actuellement désactivées.'
+            );
+          }
+
           const modal =
             new ModalBuilder()
               .setCustomId(
@@ -4419,8 +8098,12 @@ client.on(
               .setPlaceholder(
                 'Explique ton idée...'
               )
-              .setRequired(true)
-              .setMaxLength(2000);
+              .setRequired(
+                true
+              )
+              .setMaxLength(
+                2000
+              );
 
           modal.addComponents(
             new ActionRowBuilder()
@@ -4462,7 +8145,7 @@ client.on(
 
           const reason =
             interaction.fields.getTextInputValue(
-              'decision_reason'
+              'reason'
             );
 
           const application =
@@ -4477,20 +8160,27 @@ client.on(
             );
 
           if (
-            !application ||
-            application.status !==
-              'pending'
+            !application
           ) {
-            return interaction.reply({
-              content:
-                '❌ Cette candidature n’est plus disponible.',
-              flags:
-                MessageFlags.Ephemeral
-            });
+            return textReply(
+              interaction,
+              '❌ Candidature introuvable.'
+            );
+          }
+
+          if (
+            application.status !==
+            'pending'
+          ) {
+            return textReply(
+              interaction,
+              '❌ Cette candidature a déjà été traitée.'
+            );
           }
 
           const accepted =
-            action === 'accept';
+            action ===
+            'accept';
 
           db.prepare(`
             UPDATE applications
@@ -4530,7 +8220,9 @@ client.on(
                   () => null
                 );
 
-            if (member) {
+            if (
+              member
+            ) {
               await member.roles
                 .add(
                   config.roles.staff,
@@ -4565,19 +8257,24 @@ client.on(
                       accepted
                         ? `Candidature #${applicationId} acceptée`
                         : `Candidature #${applicationId} refusée`,
+
                     description:
-                      `**Candidat :** <@${application.user_id}>\n` +
-                      `**Traité par :** ${interaction.user}\n` +
-                      `**Raison :** ${reason}\n\n` +
-                      `**Statut :** ${
+                      [
+                        `**Candidat :** <@${application.user_id}>`,
+                        `**Traité par :** ${interaction.user}`,
+                        '',
+                        `**Raison :** ${reason}`,
+                        '',
                         accepted
                           ? '✅ Acceptée'
                           : '❌ Refusée'
-                      }`,
+                      ].join('\n'),
+
                     accent:
                       accepted
                         ? 0x57F287
                         : 0xED4245,
+
                     footer:
                       `${config.serverName} • Candidature traitée`
                   })
@@ -4599,12 +8296,20 @@ client.on(
                     accepted
                       ? 'Candidature acceptée'
                       : 'Candidature refusée',
+
                   description:
                     accepted
-                      ? `Félicitations ! Ta candidature Staff sur **${config.serverName}** a été acceptée.\n\n` +
-                        `**Raison :** ${reason}`
-                      : `Ta candidature Staff sur **${config.serverName}** a été refusée.\n\n` +
-                        `**Raison :** ${reason}`,
+                      ? [
+                          `Félicitations ! Ta candidature Staff sur **${config.serverName}** a été acceptée.`,
+                          '',
+                          `**Raison :** ${reason}`
+                        ].join('\n')
+                      : [
+                          `Ta candidature Staff sur **${config.serverName}** a été refusée.`,
+                          '',
+                          `**Raison :** ${reason}`
+                        ].join('\n'),
+
                   accent:
                     accepted
                       ? 0x57F287
@@ -4614,32 +8319,30 @@ client.on(
             );
           } catch {}
 
-          return interaction.reply({
-            content:
-              accepted
-                ? '✅ Candidature acceptée et candidat averti.'
-                : '✅ Candidature refusée et candidat averti.',
-            flags:
-              MessageFlags.Ephemeral
-          });
+          return textReply(
+            interaction,
+            accepted
+              ? '✅ Candidature acceptée et candidat averti.'
+              : '✅ Candidature refusée et candidat averti.'
+          );
         }
 
         // --------------------------------------------------------------------
-        // SUGGESTION MODAL
+        // SUGGESTION
         // --------------------------------------------------------------------
 
         if (
           interaction.customId ===
           'suggestion_modal'
         ) {
-          const text =
-            interaction.fields.getTextInputValue(
-              'suggestion_text'
-            );
-
           const config =
             getConfig(
               interaction.guild.id
+            );
+
+          const text =
+            interaction.fields.getTextInputValue(
+              'suggestion_text'
             );
 
           const channel =
@@ -4648,13 +8351,13 @@ client.on(
               config.channels.suggestions
             );
 
-          if (!channel) {
-            return interaction.reply({
-              content:
-                '❌ Le salon des suggestions est introuvable.',
-              flags:
-                MessageFlags.Ephemeral
-            });
+          if (
+            !channel
+          ) {
+            return textReply(
+              interaction,
+              '❌ Le salon des suggestions est introuvable.'
+            );
           }
 
           const result =
@@ -4665,9 +8368,12 @@ client.on(
                 message_id,
                 user_id,
                 text,
+                upvotes,
+                downvotes,
+                status,
                 created_at
               )
-              VALUES (?, ?, ?, ?, ?, ?)
+              VALUES (?, ?, ?, ?, ?, '[]', '[]', 'pending', ?)
             `).run(
               interaction.guild.id,
               channel.id,
@@ -4677,7 +8383,7 @@ client.on(
               Date.now()
             );
 
-          const suggestion =
+          let suggestion =
             db.prepare(`
               SELECT *
               FROM suggestions
@@ -4691,7 +8397,9 @@ client.on(
               .setCustomId(
                 `suggestion_up:${suggestion.id}`
               )
-              .setLabel('Pour 0')
+              .setLabel(
+                'Pour 0'
+              )
               .setEmoji('👍')
               .setStyle(
                 ButtonStyle.Success
@@ -4702,7 +8410,9 @@ client.on(
               .setCustomId(
                 `suggestion_down:${suggestion.id}`
               )
-              .setLabel('Contre 0')
+              .setLabel(
+                'Contre 0'
+              )
               .setEmoji('👎')
               .setStyle(
                 ButtonStyle.Danger
@@ -4714,19 +8424,27 @@ client.on(
                 container({
                   title:
                     `Suggestion #${suggestion.id}`,
+
                   description:
-                    `**Auteur :** <@${suggestion.user_id}>\n\n` +
-                    text +
-                    '\n\n' +
-                    '**Statut :** 🕐 En attente',
+                    [
+                      `**Auteur :** <@${suggestion.user_id}>`,
+                      '',
+                      text,
+                      '',
+                      '**Statut :** 🕐 En attente'
+                    ].join('\n'),
+
                   accent:
-                    0xFEE75C,
-                  components: [
-                    row(
-                      up,
-                      down
-                    )
+                    config.appearance.warningColor,
+
+                  rows: [
+                    new ActionRowBuilder()
+                      .addComponents(
+                        up,
+                        down
+                      )
                   ],
+
                   footer:
                     `${config.serverName} • Suggestions`
                 })
@@ -4742,890 +8460,463 @@ client.on(
             suggestion.id
           );
 
-          return interaction.reply({
+          return textReply(
+            interaction,
+            `✅ Suggestion envoyée dans ${channel}.`
+          );
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG ADD QUESTION
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_add_question'
+        ) {
+          if (
+            !configAccessAllowed(
+              interaction
+            )
+          ) {
+            return textReply(
+              interaction,
+              '❌ Accès configuration refusé.'
+            );
+          }
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          const question =
+            interaction.fields
+              .getTextInputValue(
+                'question'
+              )
+              .trim();
+
+          config.applications
+            .questions
+            .push(
+              question
+            );
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          return textReply(
+            interaction,
+            `✅ Question #${config.applications.questions.length} ajoutée.`
+          );
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG REMOVE QUESTION
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_remove_question'
+        ) {
+          const index =
+            Number(
+              interaction.fields
+                .getTextInputValue(
+                  'index'
+                )
+            ) - 1;
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          if (
+            !Number.isInteger(
+              index
+            ) ||
+            !config.applications
+              .questions[index]
+          ) {
+            return textReply(
+              interaction,
+              '❌ Numéro de question invalide.'
+            );
+          }
+
+          const removed =
+            config.applications
+              .questions
+              .splice(
+                index,
+                1
+              );
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          return textReply(
+            interaction,
+            `✅ Question supprimée : ${removed[0]}`
+          );
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG COLOR
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_color_modal'
+        ) {
+          const hex =
+            interaction.fields
+              .getTextInputValue(
+                'hex'
+              )
+              .trim()
+              .replace(
+                '#',
+                ''
+              );
+
+          if (
+            !/^[0-9a-fA-F]{6}$/.test(
+              hex
+            )
+          ) {
+            return textReply(
+              interaction,
+              '❌ Couleur invalide. Exemple : `#5865F2`.'
+            );
+          }
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          config.appearance
+            .accentColor =
+            parseInt(
+              hex,
+              16
+            );
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          await textReply(
+            interaction,
+            `✅ Couleur principale définie sur #${hex.toUpperCase()}.`
+          );
+
+          await syncAllPanels(
+            interaction.guild
+          );
+
+          return;
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG CLAIM HOURS
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'config_claim_hours'
+        ) {
+          const hours =
+            Number(
+              interaction.fields
+                .getTextInputValue(
+                  'hours'
+                )
+            );
+
+          if (
+            !Number.isFinite(
+              hours
+            ) ||
+            hours < 1 ||
+            hours > 168
+          ) {
+            return textReply(
+              interaction,
+              '❌ Entre une durée comprise entre 1 et 168 heures.'
+            );
+          }
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          config.giveaways.claimHours =
+            hours;
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          return textReply(
+            interaction,
+            `✅ Délai de réclamation défini sur ${hours} heure(s).`
+          );
+        }
+      }
+    } catch (
+      error
+    ) {
+      console.error(
+        '❌ Interaction error:',
+        error
+      );
+
+      /*
+       * This is deliberately robust so the interaction doesn't silently
+       * expire when an unexpected coding error happens.
+       */
+      try {
+        if (
+          interaction.replied ||
+          interaction.deferred
+        ) {
+          if (
+            interaction.isMessageComponent()
+          ) {
+            await interaction.followUp({
+              content:
+                '❌ Une erreur est survenue. Vérifie la console du bot.',
+              flags:
+                MessageFlags.Ephemeral
+            });
+          }
+        } else {
+          await interaction.reply({
             content:
-              `✅ Suggestion envoyée dans ${channel}.`,
+              '❌ Une erreur est survenue. Vérifie la console du bot.',
             flags:
               MessageFlags.Ephemeral
           });
         }
-      }
-    } catch (error) {
-      console.error(
-        'Interaction error:',
-        error
-      );
-
-      if (
-        !interaction.replied &&
-        !interaction.deferred
-      ) {
-        try {
-          await interaction.reply({
-            content:
-              '❌ Une erreur est survenue.',
-            flags:
-              MessageFlags.Ephemeral
-          });
-        } catch {}
-      }
+      } catch {}
     }
   }
 );
 
 // ============================================================================
-// CONFIG OPTION HANDLER
+// UTILITY CONFIG COLOR
 // ============================================================================
 
-async function handleConfigOption(
-  interaction,
-  category,
-  value
+function configCategoryColor(
+  guildId
 ) {
-  const config =
-    getConfig(
-      interaction.guild.id
-    );
-
-  // --------------------------------------------------------------------------
-  // CHANNEL PICKER
-  // --------------------------------------------------------------------------
-
-  const channelMap = {
-    channel_welcome:
-      'channels.welcome',
-
-    channel_rules:
-      'channels.rules',
-
-    channel_applications:
-      'channels.applicationLogs',
-
-    channel_suggestions:
-      'channels.suggestions',
-
-    channel_sessions:
-      'channels.sessions',
-
-    channel_logs:
-      'channels.logs',
-
-    channel_ticket_category:
-      'channels.ticketCategory'
-  };
-
-  if (
-    channelMap[value]
-  ) {
-    const modal =
-      new ModalBuilder()
-        .setCustomId(
-          `config_channel_modal:${channelMap[value]}`
-        )
-        .setTitle(
-          'Modifier un salon'
-        );
-
-    const input =
-      new TextInputBuilder()
-        .setCustomId(
-          'channel_id'
-        )
-        .setLabel(
-          'ID du salon'
-        )
-        .setPlaceholder(
-          'Ex: 123456789012345678'
-        )
-        .setStyle(
-          TextInputStyle.Short
-        )
-        .setRequired(false);
-
-    modal.addComponents(
-      new ActionRowBuilder()
-        .addComponents(
-          input
-        )
-    );
-
-    return interaction.showModal(
-      modal
-    );
-  }
-
-  // --------------------------------------------------------------------------
-  // ROLE PICKER
-  // --------------------------------------------------------------------------
-
-  const roleMap = {
-    role_verified:
-      'roles.verified',
-
-    role_staff:
-      'roles.staff',
-
-    role_support:
-      'roles.ticketSupport',
-
-    role_config:
-      'roles.config',
-
-    role_giveaways:
-      'roles.giveaways'
-  };
-
-  if (
-    roleMap[value]
-  ) {
-    const modal =
-      new ModalBuilder()
-        .setCustomId(
-          `config_role_modal:${roleMap[value]}`
-        )
-        .setTitle(
-          'Modifier un rôle'
-        );
-
-    const input =
-      new TextInputBuilder()
-        .setCustomId(
-          'role_id'
-        )
-        .setLabel(
-          'ID du rôle'
-        )
-        .setPlaceholder(
-          'Ex: 123456789012345678'
-        )
-        .setStyle(
-          TextInputStyle.Short
-        )
-        .setRequired(false);
-
-    modal.addComponents(
-      new ActionRowBuilder()
-        .addComponents(
-          input
-        )
-    );
-
-    return interaction.showModal(
-      modal
-    );
-  }
-
-  // --------------------------------------------------------------------------
-  // TOGGLES
-  // --------------------------------------------------------------------------
-
-  const toggleMap = {
-    system_welcome:
-      'systems.welcome',
-
-    system_rules:
-      'systems.rules',
-
-    system_applications:
-      'systems.applications',
-
-    system_giveaways:
-      'systems.giveaways',
-
-    system_tickets:
-      'systems.tickets',
-
-    system_suggestions:
-      'systems.suggestions',
-
-    system_sessions:
-      'systems.sessions',
-
-    system_security:
-      'systems.security',
-
-    security_antiraid:
-      'systems.antiRaid',
-
-    security_antispam:
-      'systems.antiSpam',
-
-    security_massmention:
-      'systems.antiMassMention',
-
-    security_massdelete:
-      'systems.antiMassDelete',
-
-    security_badwords:
-      'systems.badWords',
-
-    session_ping:
-      'sessions.autoPingEveryone',
-
-    session_clear:
-      'sessions.clearOnShutdown',
-
-    ticket_delete:
-      'tickets.deleteAfterClose',
-
-    app_role_toggle:
-      'applications.giveStaffRoleOnAccept'
-  };
-
-  if (
-    toggleMap[value]
-  ) {
-    const path =
-      toggleMap[value];
-
-    const current =
-      getNested(
-        config,
-        path
-      );
-
-    setNested(
-      config,
-      path,
-      !current
-    );
-
-    saveConfig(
-      interaction.guild.id,
-      config
-    );
-
-    await interaction.update({
-      flags:
-        MessageFlags.IsComponentsV2,
-      components: [
-        buildConfigCategory(
-          config,
-          category
-        )
-      ]
-    });
-
-    return;
-  }
-
-  // --------------------------------------------------------------------------
-  // APPLICATION QUESTIONS
-  // --------------------------------------------------------------------------
-
-  if (
-    value === 'app_questions'
-  ) {
-    const text =
-      config.applications.questions
-        .map(
-          (question, index) =>
-            `**${index + 1}.** ${question}`
-        )
-        .join('\n');
-
-    return interaction.update({
-      flags:
-        MessageFlags.IsComponentsV2,
-      components: [
-        container({
-          title:
-            'Questions de candidature',
-          description:
-            text ||
-            'Aucune question.',
-          accent:
-            config.appearance.accentColor
-        })
-      ]
-    });
-  }
-
-  if (
-    value === 'app_add'
-  ) {
-    const modal =
-      new ModalBuilder()
-        .setCustomId(
-          'config_add_question'
-        )
-        .setTitle(
-          'Ajouter une question'
-        );
-
-    const input =
-      new TextInputBuilder()
-        .setCustomId(
-          'question'
-        )
-        .setLabel(
-          'Question'
-        )
-        .setStyle(
-          TextInputStyle.Paragraph
-        )
-        .setRequired(true)
-        .setMaxLength(1000);
-
-    modal.addComponents(
-      new ActionRowBuilder()
-        .addComponents(
-          input
-        )
-    );
-
-    return interaction.showModal(
-      modal
-    );
-  }
-
-  if (
-    value === 'app_remove'
-  ) {
-    const modal =
-      new ModalBuilder()
-        .setCustomId(
-          'config_remove_question'
-        )
-        .setTitle(
-          'Supprimer une question'
-        );
-
-    const input =
-      new TextInputBuilder()
-        .setCustomId(
-          'index'
-        )
-        .setLabel(
-          'Numéro de la question'
-        )
-        .setStyle(
-          TextInputStyle.Short
-        )
-        .setRequired(true)
-        .setPlaceholder(
-          'Ex: 3'
-        );
-
-    modal.addComponents(
-      new ActionRowBuilder()
-        .addComponents(
-          input
-        )
-    );
-
-    return interaction.showModal(
-      modal
-    );
-  }
-
-  // --------------------------------------------------------------------------
-  // TICKET PREFIX
-  // --------------------------------------------------------------------------
-
-  if (
-    value === 'ticket_prefix'
-  ) {
-    const modal =
-      new ModalBuilder()
-        .setCustomId(
-          'config_ticket_prefix'
-        )
-        .setTitle(
-          'Préfixe des tickets'
-        );
-
-    const input =
-      new TextInputBuilder()
-        .setCustomId(
-          'prefix'
-        )
-        .setLabel(
-          'Préfixe'
-        )
-        .setStyle(
-          TextInputStyle.Short
-        )
-        .setRequired(true)
-        .setMaxLength(20);
-
-    modal.addComponents(
-      new ActionRowBuilder()
-        .addComponents(
-          input
-        )
-    );
-
-    return interaction.showModal(
-      modal
-    );
-  }
-
-  // --------------------------------------------------------------------------
-  // APPEARANCE
-  // --------------------------------------------------------------------------
-
-  if (
-    value === 'appearance_accent'
-  ) {
-    const modal =
-      new ModalBuilder()
-        .setCustomId(
-          'config_accent'
-        )
-        .setTitle(
-          'Couleur principale'
-        );
-
-    const input =
-      new TextInputBuilder()
-        .setCustomId(
-          'hex'
-        )
-        .setLabel(
-          'Couleur HEX'
-        )
-        .setPlaceholder(
-          '#5865F2'
-        )
-        .setStyle(
-          TextInputStyle.Short
-        )
-        .setRequired(true);
-
-    modal.addComponents(
-      new ActionRowBuilder()
-        .addComponents(
-          input
-        )
-    );
-
-    return interaction.showModal(
-      modal
-    );
-  }
-
-  // --------------------------------------------------------------------------
-  // BYPASS
-  // --------------------------------------------------------------------------
-
-  if (
-    value === 'security_bypass_add'
-  ) {
-    const modal =
-      new ModalBuilder()
-        .setCustomId(
-          'config_bypass'
-        )
-        .setTitle(
-          'Ajouter un rôle bypass'
-        );
-
-    const system =
-      new TextInputBuilder()
-        .setCustomId(
-          'system'
-        )
-        .setLabel(
-          'Système'
-        )
-        .setPlaceholder(
-          'badWords / antiSpam / antiRaid / etc.'
-        )
-        .setStyle(
-          TextInputStyle.Short
-        )
-        .setRequired(true);
-
-    const role =
-      new TextInputBuilder()
-        .setCustomId(
-          'role'
-        )
-        .setLabel(
-          'ID du rôle'
-        )
-        .setPlaceholder(
-          '123456789012345678'
-        )
-        .setStyle(
-          TextInputStyle.Short
-        )
-        .setRequired(true);
-
-    modal.addComponents(
-      new ActionRowBuilder()
-        .addComponents(
-          system
-        ),
-      new ActionRowBuilder()
-        .addComponents(
-          role
-        )
-    );
-
-    return interaction.showModal(
-      modal
-    );
-  }
-
-  return interaction.update({
-    flags:
-      MessageFlags.IsComponentsV2,
-    components: [
-      buildConfigCategory(
-        config,
-        category
-      )
-    ]
-  });
+  return getConfig(
+    guildId
+  ).appearance.accentColor;
 }
 
 // ============================================================================
-// CONFIG MODALS
+// CLEAR CHANNEL
 // ============================================================================
 
-client.on(
-  Events.InteractionCreate,
-  async interaction => {
+async function clearChannel(
+  channel
+) {
+  let safety =
+    0;
+
+  while (
+    safety < 200
+  ) {
+    safety++;
+
+    const messages =
+      await channel.messages.fetch({
+        limit: 100
+      });
+
     if (
-      !interaction.isModalSubmit()
+      !messages.size
     ) {
-      return;
+      break;
     }
 
-    try {
-      const config =
-        getConfig(
-          interaction.guild.id
-        );
-
-      // ----------------------------------------------------------------------
-      // CHANNEL
-      // ----------------------------------------------------------------------
-
-      if (
-        interaction.customId.startsWith(
-          'config_channel_modal:'
-        )
-      ) {
-        const path =
-          interaction.customId
-            .split(':')[1];
-
-        const value =
-          interaction.fields
-            .getTextInputValue(
-              'channel_id'
-            )
-            .trim();
-
-        setNested(
-          config,
-          path,
-          value || null
-        );
-
-        saveConfig(
-          interaction.guild.id,
-          config
-        );
-
-        await interaction.reply({
-          content:
-            '✅ Salon enregistré. Les panneaux seront synchronisés automatiquement.',
-          flags:
-            MessageFlags.Ephemeral
-        });
-
-        await syncAllPanels(
-          interaction.guild
-        );
-
-        return;
-      }
-
-      // ----------------------------------------------------------------------
-      // ROLE
-      // ----------------------------------------------------------------------
-
-      if (
-        interaction.customId.startsWith(
-          'config_role_modal:'
-        )
-      ) {
-        const path =
-          interaction.customId
-            .split(':')[1];
-
-        const value =
-          interaction.fields
-            .getTextInputValue(
-              'role_id'
-            )
-            .trim();
-
-        setNested(
-          config,
-          path,
-          value || null
-        );
-
-        saveConfig(
-          interaction.guild.id,
-          config
-        );
-
-        return interaction.reply({
-          content:
-            '✅ Rôle enregistré.',
-          flags:
-            MessageFlags.Ephemeral
-        });
-      }
-
-      // ----------------------------------------------------------------------
-      // QUESTION ADD
-      // ----------------------------------------------------------------------
-
-      if (
-        interaction.customId ===
-        'config_add_question'
-      ) {
-        const question =
-          interaction.fields
-            .getTextInputValue(
-              'question'
-            )
-            .trim();
-
-        config.applications.questions.push(
-          question
-        );
-
-        saveConfig(
-          interaction.guild.id,
-          config
-        );
-
-        return interaction.reply({
-          content:
-            '✅ Question ajoutée.',
-          flags:
-            MessageFlags.Ephemeral
-        });
-      }
-
-      // ----------------------------------------------------------------------
-      // QUESTION REMOVE
-      // ----------------------------------------------------------------------
-
-      if (
-        interaction.customId ===
-        'config_remove_question'
-      ) {
-        const index =
-          Number(
-            interaction.fields
-              .getTextInputValue(
-                'index'
-              )
-          ) - 1;
-
-        if (
-          !Number.isInteger(index) ||
-          !config.applications.questions[index]
-        ) {
-          return interaction.reply({
-            content:
-              '❌ Numéro de question invalide.',
-            flags:
-              MessageFlags.Ephemeral
-          });
-        }
-
-        config.applications.questions.splice(
-          index,
-          1
-        );
-
-        saveConfig(
-          interaction.guild.id,
-          config
-        );
-
-        return interaction.reply({
-          content:
-            '✅ Question supprimée.',
-          flags:
-            MessageFlags.Ephemeral
-        });
-      }
-
-      // ----------------------------------------------------------------------
-      // TICKET PREFIX
-      // ----------------------------------------------------------------------
-
-      if (
-        interaction.customId ===
-        'config_ticket_prefix'
-      ) {
-        const prefix =
-          interaction.fields
-            .getTextInputValue(
-              'prefix'
-            )
-            .trim();
-
-        config.tickets.prefix =
-          prefix || 'ticket';
-
-        saveConfig(
-          interaction.guild.id,
-          config
-        );
-
-        return interaction.reply({
-          content:
-            `✅ Préfixe changé en \`${config.tickets.prefix}\`.`,
-          flags:
-            MessageFlags.Ephemeral
-        });
-      }
-
-      // ----------------------------------------------------------------------
-      // ACCENT
-      // ----------------------------------------------------------------------
-
-      if (
-        interaction.customId ===
-        'config_accent'
-      ) {
-        const hex =
-          interaction.fields
-            .getTextInputValue(
-              'hex'
-            )
-            .trim()
-            .replace(
-              '#',
-              ''
-            );
-
-        if (
-          !/^[0-9a-fA-F]{6}$/.test(
-            hex
-          )
-        ) {
-          return interaction.reply({
-            content:
-              '❌ Couleur invalide. Exemple : `#5865F2`.',
-            flags:
-              MessageFlags.Ephemeral
-          });
-        }
-
-        config.appearance.accentColor =
-          parseInt(
-            hex,
-            16
-          );
-
-        saveConfig(
-          interaction.guild.id,
-          config
-        );
-
-        return interaction.reply({
-          content:
-            `✅ Couleur principale définie sur \`#${hex.toUpperCase()}\`.`,
-          flags:
-            MessageFlags.Ephemeral
-        });
-      }
-
-      // ----------------------------------------------------------------------
-      // BYPASS
-      // ----------------------------------------------------------------------
-
-      if (
-        interaction.customId ===
-        'config_bypass'
-      ) {
-        const system =
-          interaction.fields
-            .getTextInputValue(
-              'system'
-            )
-            .trim();
-
-        const role =
-          interaction.fields
-            .getTextInputValue(
-              'role'
-            )
-            .trim();
-
-        const validSystems = [
-          'badWords',
-          'antiSpam',
-          'antiRaid',
-          'antiMassMention',
-          'antiMassDelete',
-          'tickets',
-          'applications',
-          'giveaways',
-          'sessions'
-        ];
-
-        if (
-          !validSystems.includes(
-            system
-          )
-        ) {
-          return interaction.reply({
-            content:
-              '❌ Système invalide.',
-            flags:
-              MessageFlags.Ephemeral
-          });
-        }
-
-        if (
-          !config.bypassRoles[system]
-        ) {
-          config.bypassRoles[system] =
-            [];
-        }
-
-        if (
-          !config.bypassRoles[system]
-            .includes(role)
-        ) {
-          config.bypassRoles[system]
-            .push(role);
-        }
-
-        saveConfig(
-          interaction.guild.id,
-          config
-        );
-
-        return interaction.reply({
-          content:
-            `✅ Le rôle \`${role}\` peut maintenant bypass \`${system}\`.`,
-          flags:
-            MessageFlags.Ephemeral
-        });
-      }
-    } catch (error) {
-      console.error(
-        'Config modal error:',
-        error
+    const recent =
+      messages.filter(
+        message =>
+          Date.now() -
+            message.createdTimestamp <
+          14 *
+            24 *
+            60 *
+            60 *
+            1000
       );
+
+    const old =
+      messages.filter(
+        message =>
+          Date.now() -
+            message.createdTimestamp >=
+          14 *
+            24 *
+            60 *
+            60 *
+            1000
+      );
+
+    if (
+      recent.size
+    ) {
+      try {
+        await channel.bulkDelete(
+          recent,
+          true
+        );
+      } catch {
+        for (
+          const message of recent.values()
+        ) {
+          try {
+            await message.delete();
+          } catch {}
+        }
+      }
+    }
+
+    if (
+      old.size
+    ) {
+      for (
+        const message of old.values()
+      ) {
+        try {
+          await message.delete();
+        } catch {}
+      }
+    }
+
+    if (
+      messages.size < 100
+    ) {
+      break;
     }
   }
-);
+}
+
+// ============================================================================
+// PARSE DURATION
+// ============================================================================
+
+function parseDuration(
+  input
+) {
+  const text =
+    String(input)
+      .toLowerCase()
+      .replace(
+        /\s+/g,
+        ''
+      );
+
+  const regex =
+    /(\d+)(s|m|h|d|w)/g;
+
+  let total =
+    0;
+
+  let found =
+    false;
+
+  let match;
+
+  while (
+    (match =
+      regex.exec(text))
+  ) {
+    found =
+      true;
+
+    const amount =
+      Number(
+        match[1]
+      );
+
+    switch (
+      match[2]
+    ) {
+      case 's':
+        total +=
+          amount *
+          1000;
+        break;
+
+      case 'm':
+        total +=
+          amount *
+          60 *
+          1000;
+        break;
+
+      case 'h':
+        total +=
+          amount *
+          60 *
+          60 *
+          1000;
+        break;
+
+      case 'd':
+        total +=
+          amount *
+          24 *
+          60 *
+          60 *
+          1000;
+        break;
+
+      case 'w':
+        total +=
+          amount *
+          7 *
+          24 *
+          60 *
+          60 *
+          1000;
+        break;
+    }
+  }
+
+  return found
+    ? total
+    : null;
+}
+
+// ============================================================================
+// GIVEAWAY ANNOUNCEMENT / CLAIM REPAIR
+// ============================================================================
+
+/*
+ * If the bot restarts while a giveaway is awaiting claim,
+ * processGiveaways() will continue from the database.
+ *
+ * That means:
+ * - the 24h timer survives restart
+ * - current winner survives restart
+ * - expired winners survive restart
+ * - the ticket claim state survives restart
+ */
 
 // ============================================================================
 // ERROR HANDLERS
@@ -5665,6 +8956,23 @@ process.on(
 // LOGIN
 // ============================================================================
 
-client.login(
-  TOKEN
-);
+client
+  .login(
+    TOKEN
+  )
+  .then(
+    () =>
+      console.log(
+        '🔌 Connexion Discord lancée...'
+      )
+  )
+  .catch(
+    error => {
+      console.error(
+        '❌ Impossible de connecter le bot:',
+        error
+      );
+
+      process.exit(1);
+    }
+  );
