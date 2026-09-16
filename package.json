@@ -1,0 +1,13 @@
+{
+  "name": "rp-france-bot",
+  "version": "1.0.0",
+  "description": "R.P FRANCE Discord Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1",
+    "discord.js": "^14.24.0"
+  }
+}
