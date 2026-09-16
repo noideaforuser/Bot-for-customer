@@ -1,103 +1,43 @@
-/*
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                              BRETAGNE RP                                    ║
-║                          Discord Bot • v2.0                                  ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  BOT                                                                       ║
-║  ├─ Welcome + DM                                                           ║
-║  ├─ Règlement + validation                                                 ║
-║  ├─ Candidatures Staff                                                     ║
-║  ├─ Giveaways + réclamation 24h                                            ║
-║  ├─ Tickets multi-types                                                    ║
-║  ├─ Sessions RP                                                             ║
-║  ├─ Suggestions                                                             ║
-║  ├─ Anti-raid                                                               ║
-║  ├─ Anti-spam                                                               ║
-║  ├─ Anti-mass mention                                                       ║
-║  ├─ Anti-mass delete                                                        ║
-║  ├─ Mots interdits multilingues                                             ║
-║  ├─ Sanctions progressives                                                  ║
-║  └─ Configuration interactive                                               ║
-║                                                                              ║
-║  TEST MODE                                                                  ║
-║  ────────────────────────────────────────────────────────────────────────  ║
-║  Les restrictions de rôle pour /config et /giveaway ne sont PAS forcées    ║
-║  pour le moment. Elles sont enregistrées et prêtes à être activées plus    ║
-║  tard depuis la configuration.                                             ║
-║                                                                              ║
-║  INSTALL                                                                    ║
-║  npm install discord.js better-sqlite3                                      ║
-║                                                                              ║
-║  ENV                                                                         ║
-║  DISCORD_TOKEN=...                                                           ║
-║  CLIENT_ID=...                                                              ║
-║  GUILD_ID=...                                                               ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-*/
-
 'use strict';
-
-// ============================================================================
-// IMPORTS
-// ============================================================================
 
 const {
   Client,
   GatewayIntentBits,
   Partials,
   Events,
-  PermissionFlagsBits,
   ChannelType,
-
-  ButtonBuilder,
-  ButtonStyle,
-  ActionRowBuilder,
-
-  StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder,
-
-  ChannelSelectMenuBuilder,
-  RoleSelectMenuBuilder,
-
-  ContainerBuilder,
-  TextDisplayBuilder,
-  SeparatorBuilder,
-
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-
+  PermissionFlagsBits,
   MessageFlags,
+  ActivityType,
   SlashCommandBuilder,
   REST,
   Routes,
-
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+  RoleSelectMenuBuilder,
+  ChannelSelectMenuBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder,
   AuditLogEvent
 } = require('discord.js');
 
 const Database = require('better-sqlite3');
-
-// ============================================================================
-// ENVIRONMENT
-// ============================================================================
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID || null;
 
 if (!TOKEN || !CLIENT_ID) {
-  console.error('');
-  console.error('❌ Configuration manquante.');
-  console.error('DISCORD_TOKEN ou CLIENT_ID n’est pas défini.');
-  console.error('');
+  console.error('❌ DISCORD_TOKEN ou CLIENT_ID manquant.');
   process.exit(1);
 }
-
-// ============================================================================
-// DATABASE
-// ============================================================================
 
 const db = new Database('./bretagne-rp.sqlite');
 
@@ -109,12 +49,12 @@ CREATE TABLE IF NOT EXISTS configs (
   data TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS panel_messages (
+CREATE TABLE IF NOT EXISTS panels (
   guild_id TEXT NOT NULL,
   panel_key TEXT NOT NULL,
   channel_id TEXT NOT NULL,
   message_id TEXT NOT NULL,
-  PRIMARY KEY (guild_id, panel_key)
+  PRIMARY KEY (guild_id,panel_key)
 );
 
 CREATE TABLE IF NOT EXISTS applications (
@@ -138,12 +78,10 @@ CREATE TABLE IF NOT EXISTS giveaways (
   channel_id TEXT NOT NULL,
   message_id TEXT NOT NULL,
   prize TEXT NOT NULL,
-  duration TEXT NOT NULL,
-  winners INTEGER NOT NULL DEFAULT 1,
+  winners_count INTEGER NOT NULL DEFAULT 1,
   required_role_id TEXT,
   end_at INTEGER NOT NULL,
   participants TEXT NOT NULL DEFAULT '[]',
-  ended INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active',
   current_winner_id TEXT,
   claim_deadline INTEGER,
@@ -151,7 +89,7 @@ CREATE TABLE IF NOT EXISTS giveaways (
   expired_winners TEXT NOT NULL DEFAULT '[]',
   announcement_message_id TEXT,
   claim_ticket_channel_id TEXT,
-  claimed_at INTEGER
+  created_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS tickets (
@@ -186,42 +124,26 @@ CREATE TABLE IF NOT EXISTS sessions (
   active INTEGER NOT NULL DEFAULT 1
 );
 
-CREATE TABLE IF NOT EXISTS user_sanctions (
+CREATE TABLE IF NOT EXISTS sanctions (
   guild_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
+  day_key TEXT NOT NULL,
   strikes INTEGER NOT NULL DEFAULT 0,
-  last_strike_at INTEGER,
-  PRIMARY KEY (guild_id, user_id)
+  PRIMARY KEY(guild_id,user_id)
 );
 `);
 
-// ============================================================================
-// DATABASE MIGRATIONS
-// ============================================================================
-
-function tableHasColumn(tableName, columnName) {
-  const columns = db
-    .prepare(`PRAGMA table_info(${tableName})`)
-    .all();
-
-  return columns.some(
-    column => column.name === columnName
-  );
+function hasColumn(table, column) {
+  return db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all()
+    .some(x => x.name === column);
 }
 
-function ensureColumn(
-  tableName,
-  columnName,
-  definition
-) {
-  if (!tableHasColumn(tableName, columnName)) {
-    db.exec(`
-      ALTER TABLE ${tableName}
-      ADD COLUMN ${columnName} ${definition}
-    `);
-
-    console.log(
-      `🛠️ DB migration: ${tableName}.${columnName}`
+function ensureColumn(table, column, def) {
+  if (!hasColumn(table, column)) {
+    db.exec(
+      `ALTER TABLE ${table} ADD COLUMN ${column} ${def}`
     );
   }
 }
@@ -270,7 +192,7 @@ ensureColumn(
 
 ensureColumn(
   'giveaways',
-  'claimed_at',
+  'claim_ticket_opened_at',
   'INTEGER'
 );
 
@@ -286,27 +208,26 @@ ensureColumn(
   'INTEGER'
 );
 
-// ============================================================================
-// DEFAULT CONFIG
-// ============================================================================
-
 const DEFAULT_CONFIG = {
   serverName: 'Bretagne RP',
 
   /*
    * TEST MODE
-   * --------------------------------------------------------------------------
-   * true = role restrictions are not enforced.
-   * false = configured role restrictions become active.
+   *
+   * true:
+   * config roles are saved but not enforced.
+   *
+   * false:
+   * role restrictions are enforced.
    */
   testMode: true,
 
-  appearance: {
-    accentColor: 0x5865F2,
-    successColor: 0x57F287,
-    dangerColor: 0xED4245,
-    warningColor: 0xFEE75C,
-    neutralColor: 0x5865F2
+  colors: {
+    primary: 0x5865F2,
+    success: 0x57F287,
+    danger: 0xED4245,
+    warning: 0xFEE75C,
+    neutral: 0x5865F2
   },
 
   channels: {
@@ -317,34 +238,21 @@ const DEFAULT_CONFIG = {
 
     sessions: null,
     logs: null,
-
-    /*
-     * The panel can be left blank during testing.
-     * The bot will reuse its previous panel location or find a usable
-     * fallback channel.
-     */
     ticketPanel: null,
 
     ticketCategorySupport: null,
-    ticketCategoryGiveawayClaim: null
+    ticketCategoryClaim: null
   },
 
   roles: {
-    /*
-     * Role given after accepting the rules.
-     */
     verified: '1548280026842005594',
 
     staff: null,
 
-    /*
-     * Default role requested by the user for:
-     * - config access
-     * - giveaway management
-     * - current ticket pings
-     */
     config: '1548279987453296643',
+
     giveaways: '1548279987453296643',
+
     ticketSupport: '1548279987453296643'
   },
 
@@ -365,21 +273,11 @@ const DEFAULT_CONFIG = {
     badWords: true
   },
 
-  welcome: {
-    title: 'Bienvenue sur Bretagne RP',
-    message:
-      'Bienvenue sur **Bretagne RP** !\n\n' +
-      'Pense à consulter le règlement et à valider ton accès.',
-    dm:
-      'Bienvenue sur **Bretagne RP** !\n\n' +
-      'Rends-toi dans le salon du règlement et clique sur **J’accepte le règlement** pour obtenir ton accès.'
-  },
-
   applications: {
     questions: [
       'Quel âge avez-vous ?',
       'Depuis combien de temps êtes-vous sur Bretagne RP ?',
-      'Pourquoi souhaitez-vous rejoindre le staff ?',
+      'Pourquoi souhaitez-vous rejoindre le Staff ?',
       'Avez-vous déjà eu une expérience en modération ?',
       'Quelles sont vos qualités pour ce poste ?',
       'Pourquoi devrions-nous vous accepter ?'
@@ -388,28 +286,19 @@ const DEFAULT_CONFIG = {
     giveStaffRoleOnAccept: true
   },
 
-  /*
-   * Each ticket type can have its own:
-   * - panel label
-   * - category
-   * - viewer roles
-   * - ping roles
-   */
   tickets: {
-    panelDescription:
-      'Sélectionne le type de ticket correspondant à ta demande.',
+    prefix: 'ticket',
+
+    deleteAfterClose: true,
 
     support: {
       label: 'Ouvrir un ticket',
+
       description:
         'Besoin d’aide ou d’assistance ?',
+
       emoji: '🎫',
 
-      categoryId: null,
-
-      /*
-       * Default viewer + ping role requested by the user.
-       */
       viewRoleIds: [
         '1548279987453296643'
       ],
@@ -419,14 +308,14 @@ const DEFAULT_CONFIG = {
       ]
     },
 
-    giveawayClaim: {
-      label: 'Giveaways • Réclamation',
+    claim: {
+      label: 'Giveaway • Réclamation',
+
       description:
-        'Réclamer un giveaway que tu viens de gagner.',
+        'Réclamer un giveaway gagné.',
+
       emoji: '🏆',
 
-      categoryId: null,
-
       viewRoleIds: [
         '1548279987453296643'
       ],
@@ -434,27 +323,23 @@ const DEFAULT_CONFIG = {
       pingRoleIds: [
         '1548279987453296643'
       ]
-    },
-
-    deleteAfterClose: true,
-    prefix: 'ticket'
-  },
-
-  sessions: {
-    autoPingEveryone: true,
-    clearOnShutdown: true
+    }
   },
 
   giveaways: {
-    minimumDurationSeconds: 10,
-    claimHours: 24
+    claimHours: 24,
+    minimumDurationSeconds: 10
+  },
+
+  sessions: {
+    pingEveryone: true,
+    clearOnShutdown: true
   },
 
   security: {
     antiRaid: {
       joinThreshold: 8,
-      windowSeconds: 10,
-      timeoutNewMembers: true
+      windowSeconds: 10
     },
 
     antiSpam: {
@@ -468,10 +353,6 @@ const DEFAULT_CONFIG = {
 
     antiMassDelete: {
       threshold: 10
-    },
-
-    badWords: {
-      enabled: true
     }
   },
 
@@ -480,19 +361,11 @@ const DEFAULT_CONFIG = {
     antiSpam: [],
     antiMassMention: [],
     antiMassDelete: [],
-    badWords: [],
-    tickets: [],
-    applications: [],
-    giveaways: [],
-    sessions: []
+    badWords: []
   },
 
   customBadWords: []
 };
-
-// ============================================================================
-// CONFIG STORAGE
-// ============================================================================
 
 function clone(value) {
   return JSON.parse(
@@ -530,27 +403,20 @@ function merge(base, extra) {
 }
 
 function getConfig(guildId) {
-  const row = db
-    .prepare(`
-      SELECT data
-      FROM configs
-      WHERE guild_id = ?
-    `)
-    .get(guildId);
+  const row =
+    db
+      .prepare(
+        'SELECT data FROM configs WHERE guild_id = ?'
+      )
+      .get(guildId);
 
   if (!row) {
     const config =
       clone(DEFAULT_CONFIG);
 
-    db.prepare(`
-      INSERT INTO configs (
-        guild_id,
-        data
-      )
-      VALUES (?, ?)
-    `).run(
+    saveConfig(
       guildId,
-      JSON.stringify(config)
+      config
     );
 
     return config;
@@ -559,7 +425,9 @@ function getConfig(guildId) {
   try {
     return merge(
       DEFAULT_CONFIG,
-      JSON.parse(row.data)
+      JSON.parse(
+        row.data
+      )
     );
   } catch {
     return clone(
@@ -578,6 +446,7 @@ function saveConfig(
       data
     )
     VALUES (?, ?)
+
     ON CONFLICT(guild_id)
     DO UPDATE SET
       data = excluded.data
@@ -594,7 +463,8 @@ function getNested(
   return path
     .split('.')
     .reduce(
-      (acc, key) => acc?.[key],
+      (acc, key) =>
+        acc?.[key],
       object
     );
 }
@@ -615,7 +485,9 @@ function setNested(
     i < parts.length - 1;
     i++
   ) {
-    if (!current[parts[i]]) {
+    if (
+      !current[parts[i]]
+    ) {
       current[parts[i]] = {};
     }
 
@@ -628,238 +500,245 @@ function setNested(
   ] = value;
 }
 
-// ============================================================================
-// CLIENT
-// ============================================================================
+const client =
+  new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.DirectMessages,
+      GatewayIntentBits.GuildModeration
+    ],
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.GuildModeration
-  ],
+    partials: [
+      Partials.Channel
+    ]
+  });
 
-  partials: [
-    Partials.Channel
-  ]
-});
+const spamMap =
+  new Map();
 
-// ============================================================================
-// RUNTIME
-// ============================================================================
+const raidMap =
+  new Map();
 
-const spamTracker = new Map();
-const raidTracker = new Map();
+const BAD_WORDS =
+  new Set([
+    // French
+    'merde',
+    'putain',
+    'pute',
+    'salope',
+    'connard',
+    'connasse',
+    'encule',
+    'enculer',
+    'batard',
+    'bâtard',
+    'bordel',
 
-// ============================================================================
-// BAD WORD LIST
-// ============================================================================
+    // English
+    'fuck',
+    'fucking',
+    'fucker',
+    'shit',
+    'shitty',
+    'bitch',
+    'asshole',
+    'arsehole',
+    'dick',
+    'dumbass',
+    'bastard',
+    'motherfucker',
+    'crap',
 
-const DEFAULT_BAD_WORDS = new Set([
-  // French
-  'merde',
-  'putain',
-  'pute',
-  'salope',
-  'connard',
-  'connasse',
-  'encule',
-  'enculer',
-  'batard',
-  'bâtard',
-  'bordel',
+    // Spanish
+    'mierda',
+    'joder',
+    'puta',
+    'puto',
+    'cabron',
+    'cabrón',
+    'gilipollas',
 
-  // English
-  'fuck',
-  'fucking',
-  'fucker',
-  'shit',
-  'shitty',
-  'bitch',
-  'asshole',
-  'arsehole',
-  'dick',
-  'dumbass',
-  'bastard',
-  'motherfucker',
-  'crap',
+    // German
+    'scheisse',
+    'scheiße',
+    'arschloch',
+    'fotze',
+    'wichser',
+    'hurensohn',
+    'schlampe',
 
-  // Spanish
-  'mierda',
-  'joder',
-  'puta',
-  'puto',
-  'cabron',
-  'cabrón',
-  'gilipollas',
-  'cojones',
+    // Italian
+    'cazzo',
+    'stronzo',
+    'stronza',
+    'puttana',
+    'bastardo',
+    'vaffanculo',
 
-  // German
-  'scheisse',
-  'scheiße',
-  'arschloch',
-  'fotze',
-  'wichser',
-  'hurensohn',
-  'schlampe',
+    // Portuguese
+    'caralho',
+    'porra',
+    'puta',
+    'puto',
 
-  // Italian
-  'cazzo',
-  'merda',
-  'stronzo',
-  'stronza',
-  'puttana',
-  'bastardo',
-  'vaffanculo',
+    // Dutch
+    'klootzak',
+    'hoer',
+    'godverdomme',
 
-  // Portuguese
-  'merda',
-  'caralho',
-  'porra',
-  'puta',
-  'puto',
+    // Polish
+    'kurwa',
+    'chuj',
+    'cipa',
 
-  // Dutch
-  'klootzak',
-  'hoer',
-  'tering',
-  'godverdomme',
+    // Turkish
+    'siktir',
+    'orospu',
+    'piç',
 
-  // Polish
-  'kurwa',
-  'chuj',
-  'cipa',
-  'skurwysyn',
+    // Russian
+    'блять',
+    'блядь',
+    'сука',
+    'хуй',
+    'пизда',
+    'ебать',
 
-  // Turkish
-  'siktir',
-  'orospu',
-  'piç',
-  'pic',
+    // Ukrainian
+    'бля',
+    'блядь',
+    'сука',
+    'хуй',
 
-  // Russian
-  'блять',
-  'блядь',
-  'сука',
-  'хуй',
-  'пизда',
-  'ебать',
+    // Romanian
+    'muie',
+    'pula',
+    'pizda',
+    'curva',
 
-  // Ukrainian
-  'бля',
-  'блядь',
-  'сука',
-  'хуй',
+    // Greek
+    'μαλάκα',
+    'μαλακα',
+    'γαμω',
+    'πουτανα',
 
-  // Romanian
-  'muie',
-  'pula',
-  'pizda',
-  'futu',
-  'curva',
+    // Swedish
+    'fan',
+    'jävla',
+    'helvete',
+    'hora',
+    'fitta',
 
-  // Greek
-  'μαλάκα',
-  'μαλακα',
-  'γαμω',
-  'πουτανα',
+    // Norwegian
+    'faen',
+    'jævel',
+    'helvete',
+    'hore',
 
-  // Swedish
-  'fan',
-  'jävla',
-  'helvete',
-  'hora',
-  'fitta',
+    // Danish
+    'fanden',
+    'helvede',
+    'luder',
+    'pik',
 
-  // Norwegian
-  'faen',
-  'jævel',
-  'helvete',
-  'hore',
+    // Finnish
+    'perkele',
+    'vittu',
+    'huora',
 
-  // Danish
-  'fanden',
-  'helvede',
-  'luder',
-  'pik',
+    // Czech
+    'kurva',
+    'kokot',
+    'jebat',
 
-  // Finnish
-  'perkele',
-  'vittu',
-  'saatana',
-  'huora',
+    // Hungarian
+    'kurva',
+    'fasz',
+    'geci',
 
-  // Czech
-  'kurva',
-  'kokot',
-  'jebat',
+    // Hindi / Hinglish
+    'madarchod',
+    'bhenchod',
+    'chutiya',
+    'gandu',
+    'harami',
+    'kamina',
 
-  // Hungarian
-  'kurva',
-  'fasz',
-  'geci',
+    // Indonesian
+    'anjing',
+    'bangsat',
+    'kontol',
+    'memek',
+    'bajingan',
 
-  // Hindi / Hinglish
-  'madarchod',
-  'bhenchod',
-  'chutiya',
-  'gandu',
-  'harami',
-  'kamina',
+    // Filipino
+    'putangina',
+    'gago',
+    'tarantado',
+    'ulol',
 
-  // Indonesian
-  'anjing',
-  'bangsat',
-  'kontol',
-  'memek',
-  'bajingan',
+    // Vietnamese
+    'đụ',
+    'địt',
+    'đĩ',
+    'cặc',
 
-  // Filipino
-  'putangina',
-  'gago',
-  'tarantado',
-  'ulol',
+    // Korean
+    '씨발',
+    '시발',
+    '개새끼',
+    '병신',
 
-  // Vietnamese
-  'đụ',
-  'địt',
-  'đĩ',
-  'cặc',
+    // Japanese
+    'くそ',
+    'クソ',
+    'ばか',
+    'バカ',
 
-  // Korean
-  '씨발',
-  '시발',
-  '개새끼',
-  '병신',
+    // Arabic
+    'كلب',
+    'حمار',
+    'خرا',
+    'شرموطة'
+  ]);
 
-  // Japanese
-  'くそ',
-  'クソ',
-  'ばか',
-  'バカ',
-
-  // Arabic common profanity
-  'كلب',
-  'حمار',
-  'خرا',
-  'كس',
-  'شرموطة'
-]);
-
-function normalizeText(text) {
+function normalizeText(
+  text
+) {
   return String(text)
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(
+      /[\u0300-\u036f]/g,
+      ''
+    )
     .toLowerCase()
-    .replace(/[4@]/g, 'a')
-    .replace(/3/g, 'e')
-    .replace(/[1!]/g, 'i')
-    .replace(/0/g, 'o')
-    .replace(/[$5]/g, 's')
-    .replace(/7/g, 't')
+    .replace(
+      /[4@]/g,
+      'a'
+    )
+    .replace(
+      /3/g,
+      'e'
+    )
+    .replace(
+      /[1!]/g,
+      'i'
+    )
+    .replace(
+      /0/g,
+      'o'
+    )
+    .replace(
+      /[$5]/g,
+      's'
+    )
+    .replace(
+      /7/g,
+      't'
+    )
     .replace(
       /[^\p{L}\p{N}\s]/gu,
       ' '
@@ -875,24 +754,23 @@ function findBadWord(
   content,
   config
 ) {
-  const normalized =
-    normalizeText(
-      content
-    );
-
   const words =
     new Set(
-      normalized
+      normalizeText(
+        content
+      )
         .split(/\s+/)
         .filter(Boolean)
     );
 
   for (
-    const word of DEFAULT_BAD_WORDS
+    const word of BAD_WORDS
   ) {
     if (
       words.has(
-        normalizeText(word)
+        normalizeText(
+          word
+        )
       )
     ) {
       return word;
@@ -900,11 +778,14 @@ function findBadWord(
   }
 
   for (
-    const word of config.customBadWords
+    const word of config.customBadWords ||
+    []
   ) {
     if (
       words.has(
-        normalizeText(word)
+        normalizeText(
+          word
+        )
       )
     ) {
       return word;
@@ -914,143 +795,56 @@ function findBadWord(
   return null;
 }
 
-// ============================================================================
-// SANCTIONS
-// ============================================================================
-
-/*
-30 seconds
-1 minute
-5 minutes
-10 minutes
-30 minutes
-1 hour
-6 hours
-12 hours
-24 hours
-*/
-const SANCTION_STEPS = [
-  30,
-  60,
-  300,
-  600,
-  1800,
-  3600,
-  21600,
-  43200,
-  86400
-];
-
-function currentDayKey() {
-  const now =
-    new Date();
-
-  return [
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate()
-  ].join('-');
-}
-
-function getStrikeCount(
-  guildId,
-  userId
+function parseDuration(
+  input
 ) {
-  const row =
-    db.prepare(`
-      SELECT *
-      FROM user_sanctions
-      WHERE guild_id = ?
-        AND user_id = ?
-    `).get(
-      guildId,
-      userId
-    );
+  const text =
+    String(input)
+      .toLowerCase()
+      .replace(
+        /\s+/g,
+        ''
+      );
 
-  if (!row) {
-    return 0;
-  }
+  const regex =
+    /(\d+)(s|m|h|d|w)/g;
 
-  if (
-    !row.last_strike_at
+  let total =
+    0;
+
+  let found =
+    false;
+
+  let match;
+
+  while (
+    (match =
+      regex.exec(text))
   ) {
-    return row.strikes;
+    found =
+      true;
+
+    const amount =
+      Number(
+        match[1]
+      );
+
+    const map = {
+      s: 1000,
+      m: 60000,
+      h: 3600000,
+      d: 86400000,
+      w: 604800000
+    };
+
+    total +=
+      amount *
+      map[match[2]];
   }
 
-  const date =
-    new Date(
-      row.last_strike_at
-    );
-
-  const storedDay = [
-    date.getFullYear(),
-    date.getMonth(),
-    date.getDate()
-  ].join('-');
-
-  if (
-    storedDay !==
-    currentDayKey()
-  ) {
-    return 0;
-  }
-
-  return row.strikes;
-}
-
-function addStrike(
-  guildId,
-  userId
-) {
-  const current =
-    getStrikeCount(
-      guildId,
-      userId
-    );
-
-  const next =
-    Math.min(
-      current + 1,
-      SANCTION_STEPS.length
-    );
-
-  db.prepare(`
-    INSERT INTO user_sanctions (
-      guild_id,
-      user_id,
-      strikes,
-      last_strike_at
-    )
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(
-      guild_id,
-      user_id
-    )
-    DO UPDATE SET
-      strikes = excluded.strikes,
-      last_strike_at = excluded.last_strike_at
-  `).run(
-    guildId,
-    userId,
-    next,
-    Date.now()
-  );
-
-  return next;
-}
-
-function timeoutSecondsForStrike(
-  strike
-) {
-  return SANCTION_STEPS[
-    Math.min(
-      Math.max(
-        strike - 1,
-        0
-      ),
-      SANCTION_STEPS.length - 1
-    )
-  ];
+  return found
+    ? total
+    : null;
 }
 
 function formatDuration(
@@ -1084,81 +878,59 @@ function formatDuration(
     return `${hours} heure${hours > 1 ? 's' : ''}`;
   }
 
-  return '24 heures';
+  const days =
+    Math.floor(
+      seconds / 86400
+    );
+
+  return `${days} jour${days > 1 ? 's' : ''}`;
 }
 
-async function applyProgressiveTimeout(
-  member,
-  reason
+function todayKey() {
+  const date =
+    new Date();
+
+  return [
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate()
+  ].join('-');
+}
+
+function bool(
+  value
+) {
+  return value
+    ? '🟢 Activé'
+    : '🔴 Désactivé';
+}
+
+function roleList(
+  roleIds
 ) {
   if (
-    !member ||
-    !member.moderatable
+    !roleIds ||
+    !roleIds.length
   ) {
-    return null;
+    return 'Aucun';
   }
 
-  const strike =
-    addStrike(
-      member.guild.id,
-      member.id
-    );
-
-  const seconds =
-    timeoutSecondsForStrike(
-      strike
-    );
-
-  try {
-    await member.timeout(
-      seconds * 1000,
-      reason
-    );
-  } catch {
-    return null;
-  }
-
-  try {
-    await member.user.send(
-      v2Message(
-        container({
-          title:
-            'Sanction automatique',
-          description:
-            `Ton message a été supprimé automatiquement.\n\n` +
-            `**Raison :** ${reason}\n\n` +
-            `**Sanction :** timeout de ${formatDuration(seconds)}\n` +
-            `**Niveau :** ${strike}\n\n` +
-            `Les sanctions augmentent progressivement et le compteur est réinitialisé à la fin de la journée.`,
-          accent:
-            0xED4245,
-          footer:
-            'Bretagne RP • Modération automatique'
-        })
-      )
-    );
-  } catch {
-    // DM fermé.
-  }
-
-  return {
-    strike,
-    seconds
-  };
+  return roleIds
+    .map(
+      id =>
+        `<@&${id}>`
+    )
+    .join(', ');
 }
 
-// ============================================================================
-// V2 BUILDERS
-// ============================================================================
-
-function container({
+function makeContainer(
   title,
   description,
-  accent = 0x5865F2,
-  footer = null,
-  rows = []
-}) {
-  const result =
+  accent,
+  rows = [],
+  footer = null
+) {
+  const container =
     new ContainerBuilder()
       .setAccentColor(
         accent
@@ -1180,15 +952,17 @@ function container({
       );
 
   for (
-    const item of rows
+    const row of rows
   ) {
-    result.addActionRowComponents(
-      item
+    container.addActionRowComponents(
+      row
     );
   }
 
-  if (footer) {
-    result
+  if (
+    footer
+  ) {
+    container
       .addSeparatorComponents(
         new SeparatorBuilder()
       )
@@ -1200,124 +974,75 @@ function container({
       );
   }
 
-  return result;
+  return container;
 }
 
-function v2Message(
-  component
-) {
-  return {
-    flags:
-      MessageFlags.IsComponentsV2,
-    components: [
-      component
-    ]
-  };
-}
-
-function v2Reply(
-  interaction,
+function v2(
   component,
   ephemeral = false
 ) {
   let flags =
     MessageFlags.IsComponentsV2;
 
-  if (ephemeral) {
+  if (
+    ephemeral
+  ) {
     flags |=
       MessageFlags.Ephemeral;
   }
 
-  return interaction.reply({
+  return {
     flags,
     components: [
       component
     ]
-  });
+  };
 }
 
-function textReply(
+function replyText(
   interaction,
-  content,
-  ephemeral = true
+  text
 ) {
   return interaction.reply({
-    content,
-    ...(ephemeral
-      ? {
-          flags:
-            MessageFlags.Ephemeral
-        }
-      : {})
+    content:
+      text,
+    flags:
+      MessageFlags.Ephemeral
   });
 }
 
-// ============================================================================
-// PERMISSIONS
-// ============================================================================
-
-function isStaffMember(
-  member
-) {
-  if (!member) {
-    return false;
-  }
-
-  return (
-    member.permissions.has(
-      PermissionFlagsBits.Administrator
-    ) ||
-    member.permissions.has(
-      PermissionFlagsBits.ManageGuild
-    )
-  );
-}
-
-function roleRestrictionPasses(
-  member,
-  config,
-  roleId
+async function fetchTextChannel(
+  guild,
+  channelId
 ) {
   if (
-    config.testMode
+    !channelId
   ) {
-    return true;
+    return null;
   }
 
-  if (
-    isStaffMember(member)
-  ) {
-    return true;
-  }
+  try {
+    const channel =
+      await guild.channels.fetch(
+        channelId
+      );
 
-  if (
-    !roleId
-  ) {
-    return false;
+    return channel?.isTextBased()
+      ? channel
+      : null;
+  } catch {
+    return null;
   }
-
-  return member.roles.cache.has(
-    roleId
-  );
 }
 
 function hasBypass(
   member,
   config,
-  system
+  key
 ) {
-  if (
-    !member?.roles?.cache
-  ) {
-    return false;
-  }
-
-  const roles =
-    config.bypassRoles[
-      system
-    ] || [];
-
-  return roles.some(
+  return (
+    config.bypassRoles[key] || []
+  ).some(
     roleId =>
       member.roles.cache.has(
         roleId
@@ -1325,164 +1050,70 @@ function hasBypass(
   );
 }
 
-// ============================================================================
-// CHANNEL / ROLE HELPERS
-// ============================================================================
-
-async function getTextChannel(
-  guild,
-  channelId
+function allowedByRole(
+  interaction,
+  roleId
 ) {
-  if (!channelId) {
-    return null;
-  }
-
-  let channel =
-    guild.channels.cache.get(
-      channelId
+  const config =
+    getConfig(
+      interaction.guild.id
     );
 
   if (
-    channel &&
-    channel.isTextBased()
+    config.testMode
   ) {
-    return channel;
+    return true;
   }
 
-  try {
-    channel =
-      await guild.channels.fetch(
-        channelId
-      );
-
-    if (
-      channel &&
-      channel.isTextBased()
-    ) {
-      return channel;
-    }
-  } catch {}
-
-  return null;
-}
-
-async function getRole(
-  guild,
-  roleId
-) {
-  if (!roleId) {
-    return null;
-  }
-
-  let role =
-    guild.roles.cache.get(
-      roleId
-    );
-
-  if (role) {
-    return role;
-  }
-
-  try {
-    role =
-      await guild.roles.fetch(
-        roleId
-      );
-
-    return role;
-  } catch {
-    return null;
-  }
-}
-
-async function findFallbackChannel(
-  guild
-) {
-  const preferred = [
-    guild.systemChannel,
-    await getTextChannel(
-      guild,
-      getConfig(
-        guild.id
-      ).channels.welcome
-    ),
-    await getTextChannel(
-      guild,
-      getConfig(
-        guild.id
-      ).channels.suggestions
+  if (
+    interaction.memberPermissions?.has(
+      PermissionFlagsBits.Administrator
     )
-  ];
-
-  for (
-    const channel of preferred
   ) {
-    if (
-      channel?.isTextBased()
-    ) {
-      const me =
-        guild.members.me;
-
-      if (
-        me &&
-        channel
-          .permissionsFor(me)
-          ?.has(
-            PermissionFlagsBits.SendMessages
-          )
-      ) {
-        return channel;
-      }
-    }
+    return true;
   }
 
-  return guild.channels.cache.find(
-    channel =>
-      channel.type ===
-        ChannelType.GuildText &&
-      channel
-        .permissionsFor(
-          guild.members.me
-        )
-        ?.has(
-          PermissionFlagsBits.SendMessages
-        )
-  ) || null;
+  return Boolean(
+    roleId &&
+    interaction.member?.roles?.cache?.has(
+      roleId
+    )
+  );
 }
 
 // ============================================================================
 // PANEL STORAGE
 // ============================================================================
 
-function getStoredPanel(
+function getPanel(
   guildId,
-  panelKey
+  key
 ) {
-  return db.prepare(`
-    SELECT *
-    FROM panel_messages
-    WHERE guild_id = ?
-      AND panel_key = ?
-  `).get(
-    guildId,
-    panelKey
-  );
+  return db
+    .prepare(
+      'SELECT * FROM panels WHERE guild_id=? AND panel_key=?'
+    )
+    .get(
+      guildId,
+      key
+    );
 }
 
 function savePanel(
   guildId,
-  panelKey,
+  key,
   channelId,
   messageId
 ) {
   db.prepare(`
-    INSERT INTO panel_messages (
+    INSERT INTO panels (
       guild_id,
       panel_key,
       channel_id,
       message_id
     )
     VALUES (?, ?, ?, ?)
+
     ON CONFLICT(
       guild_id,
       panel_key
@@ -1492,39 +1123,108 @@ function savePanel(
       message_id = excluded.message_id
   `).run(
     guildId,
-    panelKey,
+    key,
     channelId,
     messageId
   );
 }
 
-// ============================================================================
-// AUTO PANEL ENGINE
-// ============================================================================
+function hasCustomId(
+  value,
+  target
+) {
+  if (
+    Array.isArray(value)
+  ) {
+    return value.some(
+      item =>
+        hasCustomId(
+          item,
+          target
+        )
+    );
+  }
 
-async function syncPanel(
+  if (
+    !value ||
+    typeof value !==
+      'object'
+  ) {
+    return false;
+  }
+
+  if (
+    value.custom_id ===
+      target ||
+    value.customId ===
+      target
+  ) {
+    return true;
+  }
+
+  return Object.values(
+    value
+  ).some(
+    item =>
+      hasCustomId(
+        item,
+        target
+      )
+  );
+}
+
+async function findExistingPanel(
+  channel,
+  customId
+) {
+  try {
+    const messages =
+      await channel.messages.fetch({
+        limit: 100
+      });
+
+    return (
+      messages.find(
+        message =>
+          hasCustomId(
+            message.components,
+            customId
+          )
+      ) || null
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function upsertPanel(
   guild,
   key,
   channel,
+  customId,
   builder
 ) {
   if (
-    !channel ||
-    !channel.isTextBased()
+    !channel
   ) {
     return;
   }
 
+  let message =
+    null;
+
   const stored =
-    getStoredPanel(
+    getPanel(
       guild.id,
       key
     );
 
-  if (stored) {
+  if (
+    stored
+  ) {
     try {
       const oldChannel =
-        await getTextChannel(
+        await fetchTextChannel(
           guild,
           stored.channel_id
         );
@@ -1532,42 +1232,49 @@ async function syncPanel(
       if (
         oldChannel
       ) {
-        const message =
+        message =
           await oldChannel.messages.fetch(
             stored.message_id
           );
-
-        if (
-          message
-        ) {
-          await message.edit(
-            v2Message(
-              builder()
-            )
-          );
-
-          savePanel(
-            guild.id,
-            key,
-            oldChannel.id,
-            message.id
-          );
-
-          return;
-        }
       }
+    } catch {}
+  }
+
+  if (
+    !message
+  ) {
+    message =
+      await findExistingPanel(
+        channel,
+        customId
+      );
+  }
+
+  if (
+    message
+  ) {
+    try {
+      await message.edit(
+        v2(
+          builder()
+        )
+      );
     } catch {
-      // Old panel gone.
-      // We recreate it below.
+      message =
+        null;
     }
   }
 
-  const message =
-    await channel.send(
-      v2Message(
-        builder()
-      )
-    );
+  if (
+    !message
+  ) {
+    message =
+      await channel.send(
+        v2(
+          builder()
+        )
+      );
+  }
 
   savePanel(
     guild.id,
@@ -1592,12 +1299,14 @@ function buildRulesPanel(
       .setLabel(
         'J’accepte le règlement'
       )
-      .setEmoji('✅')
+      .setEmoji(
+        '✅'
+      )
       .setStyle(
         ButtonStyle.Success
       );
 
-  const rulesText = [
+  const text = [
     '## Règlement RP France',
     '',
     '### Respect Mutuel',
@@ -1624,25 +1333,21 @@ function buildRulesPanel(
     '### Sanctions',
     '> Tout manquement à ces règles pourra entraîner des avertissements, des expulsions temporaires ou permanentes, selon la gravité de l’infraction.',
     '',
-    '**En cliquant sur le bouton ci-dessous, vous confirmez avoir lu et accepté le règlement.**'
+    '**Clique sur le bouton ci-dessous pour confirmer que tu as lu et accepté le règlement.**'
   ].join('\n');
 
-  return container({
-    title:
-      'Règlement RP France',
-    description:
-      rulesText,
-    accent:
-      config.appearance.successColor,
-    rows: [
+  return makeContainer(
+    'Règlement RP France',
+    text,
+    config.colors.success,
+    [
       new ActionRowBuilder()
         .addComponents(
           accept
         )
     ],
-    footer:
-      `${config.serverName} • Merci de respecter les règles`
-  });
+    `${config.serverName} • Règlement`
+  );
 }
 
 // ============================================================================
@@ -1675,52 +1380,55 @@ function buildApplicationPanel(
               ? 'Commencer une candidature Staff'
               : 'Les candidatures sont actuellement fermées'
           )
-          .setEmoji('📋')
-          .setValue('staff')
+          .setEmoji(
+            '📋'
+          )
+          .setValue(
+            'staff'
+          )
       );
 
-  return container({
-    title:
-      config.systems.applications
-        ? 'Candidatures Staff'
-        : 'Candidatures Staff • Fermées',
+  const description =
+    config.systems.applications
+      ? [
+          '## Rejoindre le Staff',
+          '',
+          `Tu souhaites rejoindre **${config.serverName}** ?`,
+          '',
+          'La candidature se déroule directement en DM avec le bot.',
+          '',
+          'Les questions sont envoyées une par une et chaque réponse est enregistrée.',
+          '',
+          'Choisis **Candidature Staff** pour commencer.'
+        ].join('\n')
+      : [
+          '## Recrutement fermé',
+          '',
+          'Les candidatures Staff sont actuellement fermées.',
+          '',
+          'Le Staff peut les rouvrir depuis /config.'
+        ].join('\n');
 
-    description:
-      config.systems.applications
-        ? [
-            '## Rejoindre le Staff',
-            '',
-            'Tu souhaites rejoindre **Bretagne RP** ?',
-            '',
-            'La candidature se déroule directement en **DM** avec le bot.',
-            '',
-            'Les questions arrivent une par une et chaque réponse est enregistrée automatiquement.',
-            '',
-            'Choisis **Candidature Staff** pour commencer.'
-          ].join('\n')
-        : [
-            '## Recrutement fermé',
-            '',
-            'Les candidatures Staff sont actuellement fermées.',
-            '',
-            'Le Staff pourra les rouvrir directement depuis `/config`.'
-          ].join('\n'),
+  return makeContainer(
+    config.systems.applications
+      ? 'Candidatures Staff'
+      : 'Candidatures Staff • Fermées',
 
-    accent:
-      config.systems.applications
-        ? config.appearance.accentColor
-        : config.appearance.dangerColor,
+    description,
 
-    rows: [
+    config.systems.applications
+      ? config.colors.primary
+      : config.colors.danger,
+
+    [
       new ActionRowBuilder()
         .addComponents(
           menu
         )
     ],
 
-    footer:
-      `${config.serverName} • Recrutement`
-  });
+    `${config.serverName} • Recrutement`
+  );
 }
 
 // ============================================================================
@@ -1760,67 +1468,51 @@ function buildTicketPanel(
 
         new StringSelectMenuOptionBuilder()
           .setLabel(
-            config.tickets
-              .giveawayClaim
-              .label
+            config.tickets.claim.label
           )
           .setDescription(
-            config.tickets
-              .giveawayClaim
-              .description
+            config.tickets.claim.description
           )
           .setEmoji(
-            config.tickets
-              .giveawayClaim
-              .emoji
+            config.tickets.claim.emoji
           )
           .setValue(
-            'giveawayClaim'
+            'claim'
           )
       );
 
-  return container({
-    title:
-      config.systems.tickets
-        ? 'Centre de support'
-        : 'Centre de support • Fermé',
+  return makeContainer(
+    config.systems.tickets
+      ? 'Centre de support'
+      : 'Centre de support • Fermé',
 
-    description:
-      config.systems.tickets
-        ? [
-            '## Ouvrir un ticket',
-            '',
-            config.tickets.panelDescription,
-            '',
-            '### 🎫 Support',
-            'Pour une demande générale, une question ou un problème.',
-            '',
-            '### 🏆 Giveaway • Réclamation',
-            'Uniquement pour les gagnants d’un giveaway actuellement en attente de réclamation.',
-            '',
-            'Les tickets sont privés et les rôles autorisés sont configurables.'
-          ].join('\n')
-        : [
-            '## Tickets temporairement fermés',
-            '',
-            'Le système de tickets est actuellement désactivé.'
-          ].join('\n'),
+    config.systems.tickets
+      ? [
+          '## Assistance & réclamations',
+          '',
+          '**🎫 Support**',
+          'Pour une question, un problème ou une demande générale.',
+          '',
+          '**🏆 Giveaway • Réclamation**',
+          'Pour réclamer un giveaway gagné pendant sa période de réclamation.',
+          '',
+          'Les rôles visibles et les pings sont configurables.'
+        ].join('\n')
+      : '## Tickets fermés\n\nLe système de tickets est actuellement désactivé.',
 
-    accent:
-      config.systems.tickets
-        ? config.appearance.accentColor
-        : config.appearance.dangerColor,
+    config.systems.tickets
+      ? config.colors.primary
+      : config.colors.danger,
 
-    rows: [
+    [
       new ActionRowBuilder()
         .addComponents(
           menu
         )
     ],
 
-    footer:
-      `${config.serverName} • Support`
-  });
+    `${config.serverName} • Support`
+  );
 }
 
 // ============================================================================
@@ -1838,44 +1530,44 @@ function buildSuggestionPanel(
       .setLabel(
         'Créer une suggestion'
       )
-      .setEmoji('💡')
+      .setEmoji(
+        '💡'
+      )
       .setStyle(
         ButtonStyle.Primary
+      )
+      .setDisabled(
+        !config.systems.suggestions
       );
 
-  return container({
-    title:
-      'Suggestions',
-    description:
-      [
-        '## Une idée pour Bretagne RP ?',
-        '',
-        'Les suggestions permettent de proposer des améliorations pour le serveur.',
-        '',
-        'Explique ton idée clairement. Les membres pourront ensuite voter.',
-        '',
-        config.systems.suggestions
-          ? 'Clique sur **Créer une suggestion** pour commencer.'
-          : 'Le système de suggestions est actuellement désactivé.'
-      ].join('\n'),
+  return makeContainer(
+    'Suggestions',
 
-    accent:
+    [
+      '## Une idée pour Bretagne RP ?',
+      '',
+      'Propose une amélioration, une nouvelle fonctionnalité ou une idée RP.',
+      '',
+      'La communauté pourra ensuite voter pour ta proposition.',
+      '',
       config.systems.suggestions
-        ? config.appearance.warningColor
-        : config.appearance.dangerColor,
+        ? 'Clique sur **Créer une suggestion** pour commencer.'
+        : 'Les suggestions sont actuellement désactivées.'
+    ].join('\n'),
 
-    rows: [
+    config.systems.suggestions
+      ? config.colors.warning
+      : config.colors.danger,
+
+    [
       new ActionRowBuilder()
         .addComponents(
-          button.setDisabled(
-            !config.systems.suggestions
-          )
+          button
         )
     ],
 
-    footer:
-      `${config.serverName} • Tes idées comptent`
-  });
+    `${config.serverName} • Suggestions`
+  );
 }
 
 // ============================================================================
@@ -1890,12 +1582,11 @@ async function syncAllPanels(
       guild.id
     );
 
-  // Rules
   if (
     config.channels.rules
   ) {
     const channel =
-      await getTextChannel(
+      await fetchTextChannel(
         guild,
         config.channels.rules
       );
@@ -1903,10 +1594,11 @@ async function syncAllPanels(
     if (
       channel
     ) {
-      await syncPanel(
+      await upsertPanel(
         guild,
         'rules',
         channel,
+        'rules_accept',
         () =>
           buildRulesPanel(
             config
@@ -1915,12 +1607,11 @@ async function syncAllPanels(
     }
   }
 
-  // Applications
   if (
     config.channels.applicationLogs
   ) {
     const channel =
-      await getTextChannel(
+      await fetchTextChannel(
         guild,
         config.channels.applicationLogs
       );
@@ -1928,10 +1619,11 @@ async function syncAllPanels(
     if (
       channel
     ) {
-      await syncPanel(
+      await upsertPanel(
         guild,
         'applications',
         channel,
+        'application_menu',
         () =>
           buildApplicationPanel(
             config
@@ -1940,62 +1632,11 @@ async function syncAllPanels(
     }
   }
 
-  // Ticket panel
-  let ticketPanelChannel =
-    await getTextChannel(
-      guild,
-      config.channels.ticketPanel
-    );
-
-  if (
-    !ticketPanelChannel
-  ) {
-    const stored =
-      getStoredPanel(
-        guild.id,
-        'tickets'
-      );
-
-    if (
-      stored
-    ) {
-      ticketPanelChannel =
-        await getTextChannel(
-          guild,
-          stored.channel_id
-        );
-    }
-  }
-
-  if (
-    !ticketPanelChannel
-  ) {
-    ticketPanelChannel =
-      await findFallbackChannel(
-        guild
-      );
-  }
-
-  if (
-    ticketPanelChannel
-  ) {
-    await syncPanel(
-      guild,
-      'tickets',
-      ticketPanelChannel,
-      () =>
-        buildTicketPanel(
-          config
-        )
-    );
-  }
-
-  // Suggestions panel
   if (
     config.channels.suggestions
   ) {
     const channel =
-      await getTextChannel(
+      await fetchTextChannel(
         guild,
         config.channels.suggestions
       );
@@ -2003,10 +1644,11 @@ async function syncAllPanels(
     if (
       channel
     ) {
-      await syncPanel(
+      await upsertPanel(
         guild,
         'suggestions',
         channel,
+        'suggestion_create',
         () =>
           buildSuggestionPanel(
             config
@@ -2014,13 +1656,118 @@ async function syncAllPanels(
       );
     }
   }
+
+  let ticketChannel =
+    await fetchTextChannel(
+      guild,
+      config.channels.ticketPanel
+    );
+
+  if (
+    !ticketChannel
+  ) {
+    const saved =
+      getPanel(
+        guild.id,
+        'tickets'
+      );
+
+    if (
+      saved
+    ) {
+      ticketChannel =
+        await fetchTextChannel(
+          guild,
+          saved.channel_id
+        );
+    }
+  }
+
+  if (
+    !ticketChannel
+  ) {
+    ticketChannel =
+      await fetchFallback(
+        guild
+      );
+  }
+
+  if (
+    ticketChannel
+  ) {
+    await upsertPanel(
+      guild,
+      'tickets',
+      ticketChannel,
+      'ticket_menu',
+      () =>
+        buildTicketPanel(
+          config
+        )
+    );
+  }
+}
+
+async function fetchFallback(
+  guild
+) {
+  const config =
+    getConfig(
+      guild.id
+    );
+
+  const channels = [
+    guild.systemChannel,
+
+    await fetchTextChannel(
+      guild,
+      config.channels.welcome
+    ),
+
+    await fetchTextChannel(
+      guild,
+      config.channels.suggestions
+    )
+  ];
+
+  for (
+    const channel of channels
+  ) {
+    if (
+      channel?.isTextBased() &&
+      channel
+        .permissionsFor(
+          guild.members.me
+        )
+        ?.has(
+          PermissionFlagsBits.SendMessages
+        )
+    ) {
+      return channel;
+    }
+  }
+
+  return (
+    guild.channels.cache.find(
+      channel =>
+        channel.type ===
+          ChannelType.GuildText &&
+        channel
+          .permissionsFor(
+            guild.members.me
+          )
+          ?.has(
+            PermissionFlagsBits.SendMessages
+          )
+    ) || null
+  );
 }
 
 // ============================================================================
 // WELCOME
 // ============================================================================
 
-async function sendWelcome(
+async function welcome(
   member
 ) {
   const config =
@@ -2035,7 +1782,7 @@ async function sendWelcome(
   }
 
   const channel =
-    await getTextChannel(
+    await fetchTextChannel(
       member.guild,
       config.channels.welcome
     );
@@ -2043,48 +1790,192 @@ async function sendWelcome(
   if (
     channel
   ) {
-    try {
-      await channel.send(
-        v2Message(
-          container({
-            title:
-              config.welcome.title,
-            description:
-              [
-                `${member}`,
-                '',
-                config.welcome.message,
-                '',
-                'Bienvenue dans la communauté.'
-              ].join('\n'),
-            accent:
-              config.appearance.accentColor,
-            footer:
-              `${config.serverName} • Nouveau membre`
-          })
+    await channel
+      .send(
+        v2(
+          makeContainer(
+            config.welcome?.title ||
+              'Bienvenue sur Bretagne RP',
+
+            `${member}\n\n${
+              config.welcome?.message ||
+              'Bienvenue sur Bretagne RP !'
+            }`,
+
+            config.colors.primary,
+
+            [],
+
+            `${config.serverName} • Nouveau membre`
+          )
         )
+      )
+      .catch(
+        () => {}
       );
-    } catch {}
   }
 
-  try {
-    await member.user.send(
-      v2Message(
-        container({
-          title:
-            config.welcome.title,
-          description:
-            config.welcome.dm,
-          accent:
-            config.appearance.accentColor
-        })
+  await member.user
+    .send(
+      v2(
+        makeContainer(
+          'Bienvenue sur Bretagne RP',
+
+          `Bienvenue sur **${config.serverName}** !\n\n` +
+            'Rends-toi dans le salon du règlement et clique sur **J’accepte le règlement** pour obtenir ton accès.',
+
+          config.colors.primary
+        )
       )
+    )
+    .catch(
+      () => {}
     );
-  } catch {}
 }
 
 // ============================================================================
-// APPLICATION SYSTEM
+// PROGRESSIVE SANCTIONS
+// ============================================================================
+
+const SANCTIONS = [
+  30,
+  60,
+  300,
+  600,
+  1800,
+  3600,
+  21600,
+  43200,
+  86400
+];
+
+function strikes(
+  guildId,
+  userId
+) {
+  const row =
+    db
+      .prepare(
+        'SELECT * FROM sanctions WHERE guild_id=? AND user_id=?'
+      )
+      .get(
+        guildId,
+        userId
+      );
+
+  if (
+    !row
+  ) {
+    return 0;
+  }
+
+  return row.day_key ===
+    todayKey()
+    ? row.strikes
+    : 0;
+}
+
+function addStrike(
+  guildId,
+  userId
+) {
+  const next =
+    Math.min(
+      strikes(
+        guildId,
+        userId
+      ) + 1,
+      SANCTIONS.length
+    );
+
+  db.prepare(`
+    INSERT INTO sanctions (
+      guild_id,
+      user_id,
+      day_key,
+      strikes
+    )
+    VALUES (?, ?, ?, ?)
+
+    ON CONFLICT(
+      guild_id,
+      user_id
+    )
+    DO UPDATE SET
+      day_key = excluded.day_key,
+      strikes = excluded.strikes
+  `).run(
+    guildId,
+    userId,
+    todayKey(),
+    next
+  );
+
+  return next;
+}
+
+async function moderate(
+  member,
+  reason
+) {
+  if (
+    !member?.moderatable
+  ) {
+    return null;
+  }
+
+  const strike =
+    addStrike(
+      member.guild.id,
+      member.id
+    );
+
+  const seconds =
+    SANCTIONS[
+      strike - 1
+    ];
+
+  await member
+    .timeout(
+      seconds * 1000,
+      reason
+    )
+    .catch(
+      () => {}
+    );
+
+  await member.user
+    .send(
+      v2(
+        makeContainer(
+          'Sanction automatique',
+
+          `Ton message a été supprimé automatiquement.\n\n` +
+            `**Raison :** ${reason}\n\n` +
+            `**Timeout :** ${formatDuration(seconds)}\n` +
+            `**Niveau :** ${strike}\n\n` +
+            'Le compteur de sanctions est réinitialisé à la fin de la journée.',
+
+          0xED4245,
+
+          [],
+
+          `${member.guild.name} • Modération`
+        )
+      )
+    )
+    .catch(
+      () => {}
+    );
+
+  return {
+    strike,
+    seconds
+  };
+}
+
+// ============================================================================
+// APPLICATIONS
 // ============================================================================
 
 async function startApplication(
@@ -2100,60 +1991,66 @@ async function startApplication(
     !config.systems.applications
   ) {
     throw new Error(
-      'APPLICATIONS_CLOSED'
+      'CLOSED'
     );
   }
 
   const existing =
-    db.prepare(`
-      SELECT *
-      FROM applications
-      WHERE guild_id = ?
-        AND user_id = ?
-        AND status = 'collecting'
-      LIMIT 1
-    `).get(
-      guildId,
-      user.id
-    );
+    db
+      .prepare(`
+        SELECT *
+        FROM applications
+        WHERE guild_id=?
+          AND user_id=?
+          AND status='collecting'
+        LIMIT 1
+      `)
+      .get(
+        guildId,
+        user.id
+      );
 
   if (
     existing
   ) {
-    await user.send(
-      v2Message(
-        container({
-          title:
+    await user
+      .send(
+        v2(
+          makeContainer(
             'Candidature déjà en cours',
-          description:
-            'Tu as déjà une candidature en cours.\n\n' +
-            'Termine celle-ci avant d’en commencer une nouvelle.',
-          accent:
-            config.appearance.warningColor
-        })
+
+            'Tu as déjà une candidature en cours. Termine celle-ci avant d’en commencer une nouvelle.',
+
+            config.colors.warning
+          )
+        )
       )
-    );
+      .catch(
+        () => {}
+      );
 
     return;
   }
 
   const result =
-    db.prepare(`
-      INSERT INTO applications (
-        guild_id,
-        user_id,
-        answers,
-        question_index,
-        status,
-        created_at
-      )
-      VALUES (?, ?, ?, 0, 'collecting', ?)
-    `).run(
-      guildId,
-      user.id,
-      JSON.stringify([]),
-      Date.now()
-    );
+    db
+      .prepare(`
+        INSERT INTO applications (
+          guild_id,
+          user_id,
+          answers,
+          question_index,
+          status,
+          created_at
+        )
+        VALUES (?, ?, ?, 0, 'collecting', ?)
+      `)
+      .run(
+        guildId,
+        user.id,
+        '[]',
+        Date.now()
+      );
 
   const start =
     new ButtonBuilder()
@@ -2163,42 +2060,44 @@ async function startApplication(
       .setLabel(
         'Commencer'
       )
-      .setEmoji('▶️')
+      .setEmoji(
+        '▶️'
+      )
       .setStyle(
         ButtonStyle.Primary
       );
 
   await user.send(
-    v2Message(
-      container({
-        title:
-          'Candidature Staff',
-        description:
-          [
-            'Bienvenue dans le système de candidature de **Bretagne RP**.',
-            '',
-            'Le bot va te poser plusieurs questions, une par une.',
-            '',
-            'Réponds directement à chaque question.',
-            '',
-            'Lorsque tu es prêt, clique sur **Commencer**.'
-          ].join('\n'),
-        accent:
-          config.appearance.accentColor,
-        rows: [
+    v2(
+      makeContainer(
+        'Candidature Staff',
+
+        [
+          'Bienvenue dans le système de candidature de **Bretagne RP**.',
+          '',
+          'Le bot va te poser plusieurs questions, une par une.',
+          '',
+          'Réponds directement à chaque question.',
+          '',
+          'Lorsque tu es prêt, clique sur **Commencer**.'
+        ].join('\n'),
+
+        config.colors.primary,
+
+        [
           new ActionRowBuilder()
             .addComponents(
               start
             )
         ],
-        footer:
-          `Candidature #${result.lastInsertRowid}`
-      })
+
+        `Candidature #${result.lastInsertRowid}`
+      )
     )
   );
 }
 
-async function askApplicationQuestion(
+async function askApplication(
   application
 ) {
   const config =
@@ -2216,32 +2115,30 @@ async function askApplicationQuestion(
     return;
   }
 
-  const question =
-    questions[
-      application.question_index
-    ];
-
   const user =
     await client.users.fetch(
       application.user_id
     );
 
   await user.send(
-    v2Message(
-      container({
-        title:
-          `Question ${application.question_index + 1}/${questions.length}`,
-        description:
-          [
-            question,
-            '',
-            'Réponds directement dans ce DM.'
-          ].join('\n'),
-        accent:
-          config.appearance.accentColor,
-        footer:
-          'Une réponse à la fois • Bretagne RP'
-      })
+    v2(
+      makeContainer(
+        `Question ${
+          application.question_index + 1
+        }/${questions.length}`,
+
+        `${
+          questions[
+            application.question_index
+          ]
+        }\n\nRéponds directement dans ce DM.`,
+
+        config.colors.primary,
+
+        [],
+
+        `${config.serverName} • Candidature`
+      )
     )
   );
 }
@@ -2266,7 +2163,7 @@ async function finalizeApplication(
   }
 
   const channel =
-    await getTextChannel(
+    await fetchTextChannel(
       guild,
       config.channels.applicationLogs
     );
@@ -2279,19 +2176,25 @@ async function finalizeApplication(
 
   const answers =
     JSON.parse(
-      application.answers || '[]'
+      application.answers ||
+        '[]'
     );
 
-  const questions =
-    config.applications.questions;
-
-  const formatted =
+  const body =
     answers
       .map(
         (answer, index) =>
-          `### ${index + 1}. ${questions[index] || 'Question'}\n${answer}`
+          `### ${
+            index + 1
+          }. ${
+            config.applications.questions[
+              index
+            ] || 'Question'
+          }\n${answer}`
       )
-      .join('\n\n');
+      .join(
+        '\n\n'
+      );
 
   const accept =
     new ButtonBuilder()
@@ -2301,7 +2204,9 @@ async function finalizeApplication(
       .setLabel(
         'Accepter'
       )
-      .setEmoji('✅')
+      .setEmoji(
+        '✅'
+      )
       .setStyle(
         ButtonStyle.Success
       );
@@ -2314,624 +2219,121 @@ async function finalizeApplication(
       .setLabel(
         'Refuser'
       )
-      .setEmoji('❌')
+      .setEmoji(
+        '❌'
+      )
       .setStyle(
         ButtonStyle.Danger
       );
 
   const message =
     await channel.send(
-      v2Message(
-        container({
-          title:
-            `Candidature Staff #${application.id}`,
-          description:
-            [
-              `**Candidat :** <@${application.user_id}>`,
-              `**Créée :** <t:${Math.floor(application.created_at / 1000)}:F>`,
-              '',
-              formatted
-            ].join('\n'),
-          accent:
-            config.appearance.accentColor,
-          rows: [
+      v2(
+        makeContainer(
+          `Candidature Staff #${application.id}`,
+
+          `**Candidat :** <@${application.user_id}>\n` +
+            `**Créée :** <t:${Math.floor(
+              application.created_at /
+                1000
+            )}:F>\n\n` +
+            body,
+
+          config.colors.primary,
+
+          [
             new ActionRowBuilder()
               .addComponents(
                 accept,
                 refuse
               )
           ],
-          footer:
-            'Utilisez les boutons pour prendre une décision.'
-        })
+
+          'Utilisez les boutons pour prendre une décision.'
+        )
       )
     );
 
   db.prepare(`
     UPDATE applications
     SET
-      status = 'pending',
-      log_channel_id = ?,
-      log_message_id = ?
-    WHERE id = ?
+      status='pending',
+      log_channel_id=?,
+      log_message_id=?
+    WHERE id=?
   `).run(
     channel.id,
     message.id,
     application.id
   );
 
-  try {
-    const user =
-      await client.users.fetch(
-        application.user_id
-      );
-
-    await user.send(
-      v2Message(
-        container({
-          title:
-            'Candidature envoyée',
-          description:
-            [
-              'Merci !',
-              '',
-              'Ta candidature a été envoyée au Staff.',
-              '',
-              'Tu recevras un message privé lorsque la décision aura été prise.'
-            ].join('\n'),
-          accent:
-            config.appearance.accentColor
-        })
-      )
-    );
-  } catch {}
-}
-
-// ============================================================================
-// TICKET TYPE HELPERS
-// ============================================================================
-
-function ticketTypeConfig(
-  config,
-  type
-) {
-  if (
-    type === 'giveawayClaim'
-  ) {
-    return config.tickets.giveawayClaim;
-  }
-
-  return config.tickets.support;
-}
-
-function ticketTypeName(
-  type
-) {
-  return type === 'giveawayClaim'
-    ? 'Giveaway • Réclamation'
-    : 'Support';
-}
-
-function ticketPingMentions(
-  type,
-  config
-) {
-  const ticket =
-    ticketTypeConfig(
-      config,
-      type
-    );
-
-  return ticket
-    .pingRoleIds
-    .map(
-      roleId =>
-        `<@&${roleId}>`
+  await client.users
+    .fetch(
+      application.user_id
     )
-    .join(' ');
-}
+    .then(
+      user =>
+        user.send(
+          v2(
+            makeContainer(
+              'Candidature envoyée',
 
-// ============================================================================
-// GIVEAWAY CLAIM CHECK
-// ============================================================================
+              'Ta candidature a été transmise au Staff. Tu recevras un DM lorsque la décision sera prise.',
 
-function getActiveClaimForUser(
-  guildId,
-  userId
-) {
-  return db.prepare(`
-    SELECT *
-    FROM giveaways
-    WHERE guild_id = ?
-      AND status = 'awaiting_claim'
-      AND current_winner_id = ?
-      AND claim_deadline > ?
-    ORDER BY id DESC
-    LIMIT 1
-  `).get(
-    guildId,
-    userId,
-    Date.now()
-  );
-}
-
-// ============================================================================
-// CREATE TICKET
-// ============================================================================
-
-async function createTicket(
-  interaction,
-  type
-) {
-  const guild =
-    interaction.guild;
-
-  const config =
-    getConfig(
-      guild.id
-    );
-
-  if (
-    !config.systems.tickets
-  ) {
-    return textReply(
-      interaction,
-      '❌ Le système de tickets est actuellement désactivé.'
-    );
-  }
-
-  // --------------------------------------------------------------------------
-  // Giveaway claim validation
-  // --------------------------------------------------------------------------
-
-  let giveaway = null;
-
-  if (
-    type === 'giveawayClaim'
-  ) {
-    giveaway =
-      getActiveClaimForUser(
-        guild.id,
-        interaction.user.id
-      );
-
-    if (
-      !giveaway
-    ) {
-      return textReply(
-        interaction,
-        '❌ Tu n’as actuellement aucun giveaway à réclamer. Cette option est uniquement disponible pour le gagnant pendant sa période de 24 heures.'
-      );
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // One open ticket of same/general type
-  // --------------------------------------------------------------------------
-
-  const existing =
-    db.prepare(`
-      SELECT *
-      FROM tickets
-      WHERE guild_id = ?
-        AND user_id = ?
-        AND type = ?
-        AND closed_at IS NULL
-      ORDER BY id DESC
-      LIMIT 1
-    `).get(
-      guild.id,
-      interaction.user.id,
-      type
-    );
-
-  if (
-    existing
-  ) {
-    return textReply(
-      interaction,
-      `❌ Tu as déjà un ticket ${ticketTypeName(type)} ouvert : <#${existing.channel_id}>`
-    );
-  }
-
-  const ticketConfig =
-    ticketTypeConfig(
-      config,
-      type
-    );
-
-  let categoryId =
-    ticketConfig.categoryId;
-
-  if (
-    type === 'support' &&
-    config.channels.ticketCategorySupport
-  ) {
-    categoryId =
-      config.channels.ticketCategorySupport;
-  }
-
-  if (
-    type === 'giveawayClaim' &&
-    config.channels.ticketCategoryGiveawayClaim
-  ) {
-    categoryId =
-      config.channels.ticketCategoryGiveawayClaim;
-  }
-
-  let parent = null;
-
-  if (
-    categoryId
-  ) {
-    const candidate =
-      guild.channels.cache.get(
-        categoryId
-      );
-
-    if (
-      candidate?.type ===
-      ChannelType.GuildCategory
-    ) {
-      parent =
-        candidate;
-    }
-  }
-
-  const overwrites = [
-    {
-      id:
-        guild.roles.everyone.id,
-      deny: [
-        PermissionFlagsBits.ViewChannel
-      ]
-    },
-
-    {
-      id:
-        interaction.user.id,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.AttachFiles
-      ]
-    }
-  ];
-
-  /*
-   * Viewer roles.
-   */
-  for (
-    const roleId of
-    ticketConfig.viewRoleIds
-  ) {
-    if (
-      guild.roles.cache.has(
-        roleId
-      )
-    ) {
-      overwrites.push({
-        id: roleId,
-        allow: [
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.ReadMessageHistory,
-          PermissionFlagsBits.AttachFiles
-        ]
-      });
-    }
-  }
-
-  const channel =
-    await guild.channels.create({
-      name:
-        `${config.tickets.prefix}-${type === 'giveawayClaim' ? 'claim' : 'support'}-${interaction.user.username}`
-          .toLowerCase()
-          .replace(
-            /[^a-z0-9-]/g,
-            '-'
-          )
-          .slice(
-            0,
-            90
-          ),
-
-      type:
-        ChannelType.GuildText,
-
-      parent:
-        parent?.id,
-
-      permissionOverwrites:
-        overwrites
-    });
-
-  db.prepare(`
-    INSERT INTO tickets (
-      guild_id,
-      channel_id,
-      user_id,
-      type,
-      giveaway_id,
-      opened_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(
-    guild.id,
-    channel.id,
-    interaction.user.id,
-    type,
-    giveaway?.id || null,
-    Date.now()
-  );
-
-  // --------------------------------------------------------------------------
-  // Stop giveaway timer immediately
-  // --------------------------------------------------------------------------
-
-  if (
-    giveaway
-  ) {
-    db.prepare(`
-      UPDATE giveaways
-      SET
-        status = 'claimed',
-        claim_deadline = NULL,
-        claim_ticket_channel_id = ?,
-        claimed_at = ?
-      WHERE id = ?
-    `).run(
-      channel.id,
-      Date.now(),
-      giveaway.id
-    );
-  }
-
-  const close =
-    new ButtonBuilder()
-      .setCustomId(
-        'ticket_close'
-      )
-      .setLabel(
-        'Fermer le ticket'
-      )
-      .setEmoji('🔒')
-      .setStyle(
-        ButtonStyle.Danger
-      );
-
-  const pingText =
-    ticketPingMentions(
-      type,
-      config
-    );
-
-  const ticketDescription =
-    type === 'giveawayClaim'
-      ? [
-          '## Réclamation Giveaway',
-          '',
-          `${interaction.user}, ton ticket de réclamation est ouvert.`,
-          '',
-          `**Giveaway :** #${giveaway.id}`,
-          `**Récompense :** ${giveaway.prize}`,
-          '',
-          'Le délai de 24 heures est maintenant **arrêté**.',
-          '',
-          'Le Staff peut maintenant vérifier et traiter ta réclamation.',
-          '',
-          pingText
-        ].join('\n')
-      : [
-          '## Support',
-          '',
-          `${interaction.user}, ton ticket est maintenant ouvert.`,
-          '',
-          'Explique clairement ta demande afin que le Staff puisse t’aider.',
-          '',
-          pingText
-        ].join('\n');
-
-  await channel.send(
-    v2Message(
-      container({
-        title:
-          type === 'giveawayClaim'
-            ? 'Réclamation Giveaway'
-            : 'Ticket Support',
-
-        description:
-          ticketDescription,
-
-        accent:
-          type === 'giveawayClaim'
-            ? config.appearance.warningColor
-            : config.appearance.accentColor,
-
-        rows: [
-          new ActionRowBuilder()
-            .addComponents(
-              close
+              config.colors.primary
             )
-        ],
-
-        footer:
-          `${config.serverName} • ${ticketTypeName(type)}`
-      })
+          )
+        )
     )
-  );
-
-  /*
-   * If this was a giveaway claim, update the original winner announcement.
-   */
-  if (
-    giveaway?.announcement_message_id
-  ) {
-    try {
-      const giveawayChannel =
-        await getTextChannel(
-          guild,
-          giveaway.channel_id
-        );
-
-      if (
-        giveawayChannel
-      ) {
-        const announcement =
-          await giveawayChannel.messages.fetch(
-            giveaway.announcement_message_id
-          );
-
-        await announcement.edit({
-          content:
-            `✅ **RÉCLAMATION OUVERTE** — <@${interaction.user.id}> a ouvert son ticket pour le giveaway **#${giveaway.id}**. Le compte à rebours de 24 heures est maintenant **arrêté**.\n\n` +
-            `🎁 **Récompense :** ${giveaway.prize}\n` +
-            `🎫 **Ticket :** <#${channel.id}>`
-        });
-      }
-    } catch {}
-  }
-
-  return textReply(
-    interaction,
-    `✅ Ton ticket a été créé : <#${channel.id}>`
-  );
+    .catch(
+      () => {}
+    );
 }
 
 // ============================================================================
-// CLOSE TICKET
+// GIVEAWAY
 // ============================================================================
 
-async function closeTicket(
-  interaction
-) {
-  const ticket =
-    db.prepare(`
-      SELECT *
-      FROM tickets
-      WHERE channel_id = ?
-        AND closed_at IS NULL
-    `).get(
-      interaction.channel.id
-    );
-
-  if (
-    !ticket
-  ) {
-    return textReply(
-      interaction,
-      '❌ Ce salon n’est pas un ticket actif.'
-    );
-  }
-
-  const config =
-    getConfig(
-      interaction.guild.id
-    );
-
-  const isOwner =
-    ticket.user_id ===
-    interaction.user.id;
-
-  const isViewer =
-    ticketTypeConfig(
-      config,
-      ticket.type
-    ).viewRoleIds
-      .some(
-        roleId =>
-          interaction.member.roles.cache.has(
-            roleId
-          )
-      );
-
-  const canManage =
-    interaction.member.permissions.has(
-      PermissionFlagsBits.ManageChannels
-    );
-
-  if (
-    !isOwner &&
-    !isViewer &&
-    !canManage
-  ) {
-    return textReply(
-      interaction,
-      '❌ Tu n’as pas la permission de fermer ce ticket.'
-    );
-  }
-
-  db.prepare(`
-    UPDATE tickets
-    SET closed_at = ?
-    WHERE channel_id = ?
-  `).run(
-    Date.now(),
-    interaction.channel.id
-  );
-
-  await textReply(
-    interaction,
-    '🔒 Ticket fermé.'
-  );
-
-  if (
-    config.tickets.deleteAfterClose
-  ) {
-    setTimeout(
-      () =>
-        interaction.channel
-          .delete(
-            'Ticket fermé'
-          )
-          .catch(() => {}),
-      1200
-    );
-  }
-}
-
-// ============================================================================
-// GIVEAWAY BUILDERS
-// ============================================================================
-
-function getGiveawayParticipants(
+function giveawayParticipants(
   giveaway
 ) {
   try {
     return JSON.parse(
-      giveaway.participants || '[]'
+      giveaway.participants ||
+        '[]'
     );
   } catch {
     return [];
   }
 }
 
-function getExpiredWinners(
+function expiredWinners(
   giveaway
 ) {
   try {
     return JSON.parse(
-      giveaway.expired_winners || '[]'
+      giveaway.expired_winners ||
+        '[]'
     );
   } catch {
     return [];
   }
 }
 
-function buildGiveawayPanel(
+function buildGiveaway(
   giveaway,
   config
 ) {
   const participants =
-    getGiveawayParticipants(
+    giveawayParticipants(
       giveaway
     );
 
-  const finished =
-    giveaway.status !== 'active';
+  const closed =
+    giveaway.status !==
+    'active';
 
-  const participate =
+  const join =
     new ButtonBuilder()
       .setCustomId(
         `giveaway_join:${giveaway.id}`
@@ -2939,12 +2341,14 @@ function buildGiveawayPanel(
       .setLabel(
         'Participer'
       )
-      .setEmoji('🎉')
+      .setEmoji(
+        '🎉'
+      )
       .setStyle(
         ButtonStyle.Primary
       )
       .setDisabled(
-        finished
+        closed
       );
 
   const leave =
@@ -2955,158 +2359,98 @@ function buildGiveawayPanel(
       .setLabel(
         'Quitter'
       )
-      .setEmoji('🚪')
+      .setEmoji(
+        '🚪'
+      )
       .setStyle(
         ButtonStyle.Secondary
       )
       .setDisabled(
-        finished
+        closed
       );
 
   let title =
     'Giveaway';
 
-  let statusText =
-    `**Temps restant :** <t:${Math.floor(giveaway.end_at / 1000)}:R>`;
+  let state =
+    `**Temps restant :** <t:${Math.floor(
+      giveaway.end_at /
+        1000
+    )}:R>`;
 
   if (
-    giveaway.status ===
-    'awaiting_claim'
+    giveaway.status !==
+    'active'
   ) {
     title =
       'Fermer';
 
-    statusText =
-      [
-        '**État :** 🟡 En attente de réclamation',
-        giveaway.current_winner_id
-          ? `**Gagnant actuel :** <@${giveaway.current_winner_id}>`
-          : '',
-        giveaway.claim_deadline
-          ? `**Réclamation jusqu’au :** <t:${Math.floor(giveaway.claim_deadline / 1000)}:F>`
-          : ''
-      ]
-        .filter(Boolean)
-        .join('\n');
+    if (
+      giveaway.status ===
+      'awaiting_claim'
+    ) {
+      state =
+        [
+          '**État :** 🟡 En attente de réclamation',
+          `**Gagnant :** <@${giveaway.current_winner_id}>`,
+          `**Réclamation jusqu’au :** <t:${Math.floor(
+            giveaway.claim_deadline /
+              1000
+          )}:F>`
+        ].join('\n');
+    } else if (
+      giveaway.status ===
+      'claimed'
+    ) {
+      state =
+        [
+          '**État :** 🟢 Réclamation ouverte',
+          '**Délai de 24h :** arrêté'
+        ].join('\n');
+    } else {
+      state =
+        '**État :** 🔴 Fermé';
+    }
   }
 
-  if (
-    giveaway.status ===
-    'claimed'
-  ) {
-    title =
-      'Fermer';
-
-    statusText =
-      [
-        '**État :** 🟢 Réclamation ouverte',
-        '**Délai de 24 h :** arrêté'
-      ].join('\n');
-  }
-
-  if (
-    giveaway.status ===
-    'ended'
-  ) {
-    title =
-      'Fermer';
-
-    statusText =
-      '**État :** 🔴 Fermé';
-  }
-
-  if (
-    giveaway.status ===
-    'no_winner'
-  ) {
-    title =
-      'Fermer';
-
-    statusText =
-      '**État :** 🔴 Aucun participant éligible restant';
-  }
-
-  const winnerHistory =
-    getExpiredWinners(
-      giveaway
-    );
-
-  const historyText =
-    winnerHistory.length
-      ? `**Anciens gagnants reroll :** ${winnerHistory.length}`
-      : '';
-
-  return container({
+  return makeContainer(
     title,
-    description:
-      [
-        `## ${giveaway.prize}`,
-        '',
-        `**Gagnant(s) prévu(s) :** ${giveaway.winners}`,
-        `**Participants :** ${participants.length}`,
-        giveaway.required_role_id
-          ? `**Rôle requis :** <@&${giveaway.required_role_id}>`
-          : '**Rôle requis :** Aucun',
-        '',
-        statusText,
-        historyText,
-        '',
-        finished
-          ? 'Le giveaway est maintenant fermé.'
-          : 'Participe avec le bouton ci-dessous.'
-      ]
-        .filter(Boolean)
-        .join('\n'),
 
-    accent:
-      finished
-        ? config.appearance.neutralColor
-        : config.appearance.warningColor,
+    [
+      `## ${giveaway.prize}`,
+      '',
+      `**Gagnant(s) :** ${giveaway.winners_count}`,
+      `**Participants :** ${participants.length}`,
 
-    rows: [
+      giveaway.required_role_id
+        ? `**Rôle requis :** <@&${giveaway.required_role_id}>`
+        : '**Rôle requis :** Aucun',
+
+      '',
+      state,
+      '',
+      closed
+        ? 'Le giveaway est fermé.'
+        : 'Participe avec les boutons ci-dessous.'
+    ].join('\n'),
+
+    closed
+      ? config.colors.neutral
+      : config.colors.warning,
+
+    [
       new ActionRowBuilder()
         .addComponents(
-          participate,
+          join,
           leave
         )
     ],
 
-    footer:
-      `${config.serverName} • Giveaway #${giveaway.id}`
-  });
+    `${config.serverName} • Giveaway #${giveaway.id}`
+  );
 }
 
-// ============================================================================
-// GIVEAWAY MESSAGE UPDATE
-// ============================================================================
-
-async function fetchGiveawayMessage(
-  giveaway
-) {
-  try {
-    const channel =
-      await getTextChannel(
-        client.guilds.cache.get(
-          giveaway.guild_id
-        ),
-        giveaway.channel_id
-      );
-
-    if (
-      !channel
-    ) {
-      return null;
-    }
-
-    return await channel.messages.fetch(
-      giveaway.message_id
-    );
-  } catch {
-    return null;
-  }
-}
-
-async function updateGiveawayMessage(
+async function editGiveaway(
   giveaway
 ) {
   const guild =
@@ -3120,47 +2464,40 @@ async function updateGiveawayMessage(
     return;
   }
 
-  const config =
-    getConfig(
-      guild.id
-    );
-
-  const message =
-    await fetchGiveawayMessage(
-      giveaway
+  const channel =
+    await fetchTextChannel(
+      guild,
+      giveaway.channel_id
     );
 
   if (
-    !message
+    !channel
   ) {
     return;
   }
 
   try {
+    const message =
+      await channel.messages.fetch(
+        giveaway.message_id
+      );
+
     await message.edit(
-      v2Message(
-        buildGiveawayPanel(
+      v2(
+        buildGiveaway(
           giveaway,
-          config
+          getConfig(
+            giveaway.guild_id
+          )
         )
       )
     );
-  } catch (error) {
-    console.error(
-      'Giveaway edit error:',
-      error.message
-    );
-  }
+  } catch {}
 }
 
-// ============================================================================
-// GIVEAWAY ANNOUNCEMENTS
-// ============================================================================
-
-async function announceGiveawayWinner(
+async function announceWinner(
   giveaway,
-  winnerId,
-  isReroll = false
+  isReroll
 ) {
   const guild =
     client.guilds.cache.get(
@@ -3174,7 +2511,7 @@ async function announceGiveawayWinner(
   }
 
   const channel =
-    await getTextChannel(
+    await fetchTextChannel(
       guild,
       giveaway.channel_id
     );
@@ -3187,62 +2524,57 @@ async function announceGiveawayWinner(
 
   const deadline =
     Math.floor(
-      giveaway.claim_deadline / 1000
+      giveaway.claim_deadline /
+        1000
     );
 
-  let content;
-
-  if (
+  const content =
     isReroll
-  ) {
-    content =
-      `🔄 **REROLL DU GIVEAWAY #${giveaway.id}**\n\n` +
-      `Le délai du gagnant précédent est arrivé à expiration sans réclamation.\n\n` +
-      `🎉 **Nouveau gagnant :** <@${winnerId}>\n` +
-      `🎁 **Récompense :** **${giveaway.prize}**\n` +
-      `⏱️ **Tu as 24 heures pour réclamer ton lot.**\n` +
-      `🎫 Ouvre le ticket **« Giveaways • Réclamation »** dans le panneau des tickets.\n\n` +
-      `⚠️ Passé **<t:${deadline}:F>**, le giveaway sera automatiquement **reroll** une nouvelle fois.`;
-  } else {
-    content =
-      `🎉 **GIVEAWAY TERMINÉ — #${giveaway.id}**\n\n` +
-      `🏆 **Félicitations <@${winnerId}> ! Tu as gagné le giveaway !**\n\n` +
-      `🎁 **Récompense :** **${giveaway.prize}**\n` +
-      `⏱️ **Tu as 24 heures pour réclamer ton lot.**\n` +
-      `🎫 Ouvre le ticket **« Giveaways • Réclamation »** dans le panneau des tickets.\n\n` +
-      `⚠️ Passé **<t:${deadline}:F>**, ton gain sera automatiquement **reroll**.`;
-  }
+      ? [
+          `🔄 **REROLL DU GIVEAWAY #${giveaway.id}**`,
+          '',
+          'Le gagnant précédent n’a pas réclamé son lot dans les 24 heures.',
+          '',
+          `🏆 **Nouveau gagnant : <@${giveaway.current_winner_id}>**`,
+          `🎁 **Récompense : ${giveaway.prize}**`,
+          '⏱️ Tu as **24 heures** pour réclamer ton lot.',
+          '🎫 Ouvre le ticket **« Giveaway • Réclamation »**.',
+          '',
+          `⚠️ Sans réclamation avant **<t:${deadline}:F>**, le giveaway sera automatiquement reroll.`
+        ].join('\n')
+      : [
+          `🎉 **GIVEAWAY TERMINÉ — #${giveaway.id}**`,
+          '',
+          `🏆 **Félicitations <@${giveaway.current_winner_id}> ! Tu as gagné le giveaway !**`,
+          `🎁 **Récompense : ${giveaway.prize}**`,
+          '⏱️ Tu as **24 heures** pour réclamer ton lot.',
+          '🎫 Ouvre le ticket **« Giveaway • Réclamation »**.',
+          '',
+          `⚠️ Sans réclamation avant **<t:${deadline}:F>**, ton gain sera automatiquement reroll.`
+        ].join('\n');
 
-  try {
-    const reply =
-      await channel.send(
-        {
-          content
-        }
-      );
+  return channel.send({
+    content,
 
-    return reply;
-  } catch {
-    return null;
-  }
+    reply: {
+      messageReference:
+        giveaway.message_id
+    }
+  });
 }
 
-// ============================================================================
-// START GIVEAWAY CLAIM ROUND
-// ============================================================================
-
-async function startGiveawayClaimRound(
+async function startClaimRound(
   giveawayId,
-  isReroll = false
+  isReroll
 ) {
   const giveaway =
-    db.prepare(`
-      SELECT *
-      FROM giveaways
-      WHERE id = ?
-    `).get(
-      giveawayId
-    );
+    db
+      .prepare(
+        'SELECT * FROM giveaways WHERE id=?'
+      )
+      .get(
+        giveawayId
+      );
 
   if (
     !giveaway
@@ -3251,38 +2583,31 @@ async function startGiveawayClaimRound(
   }
 
   const participants =
-    getGiveawayParticipants(
+    giveawayParticipants(
       giveaway
     );
 
-  let expiredWinners =
-    getExpiredWinners(
+  let expired =
+    expiredWinners(
       giveaway
     );
 
-  /*
-   * If the previous winner existed and we are rerolling,
-   * permanently exclude them from the next draw.
-   */
   if (
     isReroll &&
-    giveaway.current_winner_id
+    giveaway.current_winner_id &&
+    !expired.includes(
+      giveaway.current_winner_id
+    )
   ) {
-    if (
-      !expiredWinners.includes(
-        giveaway.current_winner_id
-      )
-    ) {
-      expiredWinners.push(
-        giveaway.current_winner_id
-      );
-    }
+    expired.push(
+      giveaway.current_winner_id
+    );
   }
 
   const pool =
     participants.filter(
       userId =>
-        !expiredWinners.includes(
+        !expired.includes(
           userId
         )
     );
@@ -3293,29 +2618,28 @@ async function startGiveawayClaimRound(
     db.prepare(`
       UPDATE giveaways
       SET
-        status = 'no_winner',
-        ended = 1,
-        current_winner_id = NULL,
-        claim_deadline = NULL,
-        expired_winners = ?
-      WHERE id = ?
+        status='closed',
+        current_winner_id=NULL,
+        claim_deadline=NULL,
+        expired_winners=?
+      WHERE id=?
     `).run(
       JSON.stringify(
-        expiredWinners
+        expired
       ),
       giveaway.id
     );
 
     const updated =
-      db.prepare(`
-        SELECT *
-        FROM giveaways
-        WHERE id = ?
-      `).get(
-        giveaway.id
-      );
+      db
+        .prepare(
+          'SELECT * FROM giveaways WHERE id=?'
+        )
+        .get(
+          giveaway.id
+        );
 
-    await updateGiveawayMessage(
+    await editGiveaway(
       updated
     );
 
@@ -3324,25 +2648,23 @@ async function startGiveawayClaimRound(
         giveaway.guild_id
       );
 
-    if (
+    const channel =
       guild
-    ) {
-      const channel =
-        await getTextChannel(
-          guild,
-          giveaway.channel_id
-        );
+        ? await fetchTextChannel(
+            guild,
+            giveaway.channel_id
+          )
+        : null;
 
-      if (
-        channel
-      ) {
-        await channel.send({
-          content:
-            `⚠️ **GIVEAWAY #${giveaway.id}**\n\n` +
-            `Il n’y a plus de participant éligible après les rerolls.\n` +
-            `La récompense **${giveaway.prize}** n’a donc pas pu être attribuée.`
-        });
-      }
+    if (
+      channel
+    ) {
+      await channel.send({
+        content:
+          `⚠️ **GIVEAWAY #${giveaway.id} FERMÉ**\n\n` +
+          'Il n’y a plus de participant éligible après les rerolls.\n' +
+          `La récompense **${giveaway.prize}** n’a pas pu être attribuée.`
+      });
     }
 
     return;
@@ -3364,60 +2686,43 @@ async function startGiveawayClaimRound(
   const deadline =
     Date.now() +
     config.giveaways.claimHours *
-      60 *
-      60 *
-      1000;
-
-  const nextRound =
-    giveaway.claim_round + 1;
+      3600000;
 
   db.prepare(`
     UPDATE giveaways
     SET
-      status = 'awaiting_claim',
-      ended = 1,
-      current_winner_id = ?,
-      claim_deadline = ?,
-      claim_round = ?,
-      expired_winners = ?,
-      announcement_message_id = NULL,
-      claim_ticket_channel_id = NULL,
-      claimed_at = NULL
-    WHERE id = ?
+      status='awaiting_claim',
+      current_winner_id=?,
+      claim_deadline=?,
+      claim_round=?,
+      expired_winners=?
+    WHERE id=?
   `).run(
     winner,
     deadline,
-    nextRound,
+    giveaway.claim_round + 1,
     JSON.stringify(
-      expiredWinners
+      expired
     ),
     giveaway.id
   );
 
   const updated =
-    db.prepare(`
-      SELECT *
-      FROM giveaways
-      WHERE id = ?
-    `).get(
-      giveaway.id
-    );
+    db
+      .prepare(
+        'SELECT * FROM giveaways WHERE id=?'
+      )
+      .get(
+        giveaway.id
+      );
 
-  /*
-   * Original giveaway message:
-   * same visual structure, title becomes exactly "Fermer".
-   */
-  await updateGiveawayMessage(
+  await editGiveaway(
     updated
   );
 
-  /*
-   * Plain message reply / announcement.
-   */
   const announcement =
-    await announceGiveawayWinner(
+    await announceWinner(
       updated,
-      winner,
       isReroll
     );
 
@@ -3426,70 +2731,56 @@ async function startGiveawayClaimRound(
   ) {
     db.prepare(`
       UPDATE giveaways
-      SET announcement_message_id = ?
-      WHERE id = ?
+      SET announcement_message_id=?
+      WHERE id=?
     `).run(
       announcement.id,
       giveaway.id
     );
   }
-
-  console.log(
-    `${isReroll ? '🔄' : '🏆'} Giveaway #${giveaway.id} winner: ${winner}`
-  );
 }
-
-// ============================================================================
-// GIVEAWAY PROCESSOR
-// ============================================================================
 
 async function processGiveaways() {
   const now =
     Date.now();
 
-  // --------------------------------------------------------------------------
-  // Active giveaways
-  // --------------------------------------------------------------------------
-
-  const ending =
-    db.prepare(`
-      SELECT *
-      FROM giveaways
-      WHERE ended = 0
-        AND status = 'active'
-        AND end_at <= ?
-    `).all(
-      now
-    );
+  const active =
+    db
+      .prepare(`
+        SELECT id
+        FROM giveaways
+        WHERE status='active'
+          AND end_at<=?
+      `)
+      .all(
+        now
+      );
 
   for (
-    const giveaway of ending
+    const giveaway of active
   ) {
-    await startGiveawayClaimRound(
+    await startClaimRound(
       giveaway.id,
       false
     );
   }
 
-  // --------------------------------------------------------------------------
-  // Waiting for claim
-  // --------------------------------------------------------------------------
-
-  const expiredClaims =
-    db.prepare(`
-      SELECT *
-      FROM giveaways
-      WHERE status = 'awaiting_claim'
-        AND claim_deadline IS NOT NULL
-        AND claim_deadline <= ?
-    `).all(
-      now
-    );
+  const expired =
+    db
+      .prepare(`
+        SELECT id
+        FROM giveaways
+        WHERE status='awaiting_claim'
+          AND claim_deadline<=?
+      `)
+      .all(
+        now
+      );
 
   for (
-    const giveaway of expiredClaims
+    const giveaway of expired
   ) {
-    await startGiveawayClaimRound(
+    await startClaimRound(
       giveaway.id,
       true
     );
@@ -3497,13 +2788,1498 @@ async function processGiveaways() {
 }
 
 // ============================================================================
-// MEMBER JOIN / ANTI RAID
+// TICKETS
+// ============================================================================
+
+async function createTicket(
+  interaction,
+  type
+) {
+  const guild =
+    interaction.guild;
+
+  const config =
+    getConfig(
+      guild.id
+    );
+
+  if (
+    !config.systems.tickets
+  ) {
+    return replyText(
+      interaction,
+      '❌ Les tickets sont actuellement désactivés.'
+    );
+  }
+
+  let giveaway =
+    null;
+
+  if (
+    type === 'claim'
+  ) {
+    giveaway =
+      db
+        .prepare(`
+          SELECT *
+          FROM giveaways
+          WHERE guild_id=?
+            AND status='awaiting_claim'
+            AND current_winner_id=?
+            AND claim_deadline>?
+        `)
+        .get(
+          guild.id,
+          interaction.user.id,
+          Date.now()
+        );
+
+    if (
+      !giveaway
+    ) {
+      return replyText(
+        interaction,
+        '❌ Tu n’as actuellement aucun giveaway à réclamer.'
+      );
+    }
+  }
+
+  const existing =
+    db
+      .prepare(`
+        SELECT *
+        FROM tickets
+        WHERE guild_id=?
+          AND user_id=?
+          AND type=?
+          AND closed_at IS NULL
+      `)
+      .get(
+        guild.id,
+        interaction.user.id,
+        type
+      );
+
+  if (
+    existing
+  ) {
+    return replyText(
+      interaction,
+      `❌ Tu as déjà un ticket ouvert : <#${existing.channel_id}>`
+    );
+  }
+
+  const ticketConfig =
+    type === 'claim'
+      ? config.tickets.claim
+      : config.tickets.support;
+
+  const parentId =
+    type === 'claim'
+      ? config.channels
+          .ticketCategoryClaim
+      : config.channels
+          .ticketCategorySupport;
+
+  const parent =
+    parentId
+      ? guild.channels.cache.get(
+          parentId
+        )
+      : null;
+
+  const permissionOverwrites = [
+    {
+      id:
+        guild.roles.everyone.id,
+
+      deny: [
+        PermissionFlagsBits.ViewChannel
+      ]
+    },
+
+    {
+      id:
+        interaction.user.id,
+
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.AttachFiles
+      ]
+    }
+  ];
+
+  for (
+    const roleId of
+    ticketConfig.viewRoleIds
+  ) {
+    if (
+      guild.roles.cache.has(
+        roleId
+      )
+    ) {
+      permissionOverwrites.push({
+        id:
+          roleId,
+
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.AttachFiles
+        ]
+      });
+    }
+  }
+
+  const channel =
+    await guild.channels.create({
+      name:
+        `${config.tickets.prefix}-${
+          type === 'claim'
+            ? 'claim'
+            : 'support'
+        }-${interaction.user.username}`
+          .toLowerCase()
+          .replace(
+            /[^a-z0-9-]/g,
+            '-'
+          )
+          .slice(
+            0,
+            90
+          ),
+
+      type:
+        ChannelType.GuildText,
+
+      parent:
+        parent?.id,
+
+      permissionOverwrites
+    });
+
+  db.prepare(`
+    INSERT INTO tickets (
+      guild_id,
+      channel_id,
+      user_id,
+      type,
+      giveaway_id,
+      opened_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    guild.id,
+    channel.id,
+    interaction.user.id,
+    type,
+    giveaway?.id ||
+      null,
+    Date.now()
+  );
+
+  if (
+    giveaway
+  ) {
+    db.prepare(`
+      UPDATE giveaways
+      SET
+        status='claimed',
+        claim_deadline=NULL,
+        claim_ticket_channel_id=?,
+        claim_ticket_opened_at=?
+      WHERE id=?
+    `).run(
+      channel.id,
+      Date.now(),
+      giveaway.id
+    );
+  }
+
+  const close =
+    new ButtonBuilder()
+      .setCustomId(
+        'ticket_close'
+      )
+      .setLabel(
+        'Fermer le ticket'
+      )
+      .setEmoji(
+        '🔒'
+      )
+      .setStyle(
+        ButtonStyle.Danger
+      );
+
+  const ping =
+    ticketConfig.pingRoleIds
+      .map(
+        roleId =>
+          `<@&${roleId}>`
+      )
+      .join(' ');
+
+  const description =
+    type === 'claim'
+      ? [
+          `## Réclamation du giveaway #${giveaway.id}`,
+          `${interaction.user}`,
+          `**Récompense :** ${giveaway.prize}`,
+          '',
+          'Le délai de réclamation de 24 heures est maintenant **arrêté**.',
+          '',
+          ping
+        ].join('\n')
+      : [
+          '## Support',
+          `${interaction.user}`,
+          '',
+          'Explique clairement ta demande afin que le Staff puisse t’aider.',
+          '',
+          ping
+        ].join('\n');
+
+  await channel.send(
+    v2(
+      makeContainer(
+        type === 'claim'
+          ? 'Giveaway • Réclamation'
+          : 'Ticket Support',
+
+        description,
+
+        type === 'claim'
+          ? config.colors.warning
+          : config.colors.primary,
+
+        [
+          new ActionRowBuilder()
+            .addComponents(
+              close
+            )
+        ],
+
+        `${guild.name} • ${
+          type === 'claim'
+            ? 'Réclamation'
+            : 'Support'
+        }`
+      )
+    )
+  );
+
+  if (
+    giveaway?.announcement_message_id
+  ) {
+    try {
+      const giveawayChannel =
+        await fetchTextChannel(
+          guild,
+          giveaway.channel_id
+        );
+
+      const announcement =
+        await giveawayChannel.messages.fetch(
+          giveaway.announcement_message_id
+        );
+
+      await announcement.reply({
+        content:
+          `✅ <@${interaction.user.id}> a ouvert son ticket de réclamation. ` +
+          `Le compte à rebours de 24 heures est maintenant **arrêté**. ` +
+          `<#${channel.id}>`
+      });
+    } catch {}
+  }
+
+  return replyText(
+    interaction,
+    `✅ Ticket créé : <#${channel.id}>`
+  );
+}
+
+async function closeTicket(
+  interaction
+) {
+  const ticket =
+    db
+      .prepare(`
+        SELECT *
+        FROM tickets
+        WHERE channel_id=?
+          AND closed_at IS NULL
+      `)
+      .get(
+        interaction.channel.id
+      );
+
+  if (
+    !ticket
+  ) {
+    return replyText(
+      interaction,
+      '❌ Ce salon n’est pas un ticket actif.'
+    );
+  }
+
+  const config =
+    getConfig(
+      interaction.guild.id
+    );
+
+  const ticketConfig =
+    ticket.type ===
+      'claim'
+      ? config.tickets.claim
+      : config.tickets.support;
+
+  const allowed =
+    ticket.user_id ===
+      interaction.user.id ||
+    interaction.member.permissions.has(
+      PermissionFlagsBits.ManageChannels
+    ) ||
+    ticketConfig.viewRoleIds.some(
+      roleId =>
+        interaction.member.roles.cache.has(
+          roleId
+        )
+    );
+
+  if (
+    !allowed
+  ) {
+    return replyText(
+      interaction,
+      '❌ Tu ne peux pas fermer ce ticket.'
+    );
+  }
+
+  db.prepare(`
+    UPDATE tickets
+    SET closed_at=?
+    WHERE channel_id=?
+  `).run(
+    Date.now(),
+    interaction.channel.id
+  );
+
+  await replyText(
+    interaction,
+    '🔒 Ticket fermé.'
+  );
+
+  if (
+    config.tickets.deleteAfterClose
+  ) {
+    setTimeout(
+      () =>
+        interaction.channel
+          .delete()
+          .catch(
+            () => {}
+          ),
+      1000
+    );
+  }
+}
+
+// ============================================================================
+// CONFIG HOME
+// ============================================================================
+
+function configHome(
+  config
+) {
+  const menu =
+    new StringSelectMenuBuilder()
+      .setCustomId(
+        'config_category'
+      )
+      .setPlaceholder(
+        'Choisir une catégorie...'
+      )
+      .addOptions(
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Salons'
+          )
+          .setEmoji(
+            '📁'
+          )
+          .setDescription(
+            'Configurer les salons'
+          )
+          .setValue(
+            'channels'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Rôles'
+          )
+          .setEmoji(
+            '👥'
+          )
+          .setDescription(
+            'Configurer les rôles'
+          )
+          .setValue(
+            'roles'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Sécurité'
+          )
+          .setEmoji(
+            '🛡️'
+          )
+          .setDescription(
+            'Configurer les protections'
+          )
+          .setValue(
+            'security'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Candidatures'
+          )
+          .setEmoji(
+            '📋'
+          )
+          .setDescription(
+            'Recrutement Staff'
+          )
+          .setValue(
+            'applications'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Tickets'
+          )
+          .setEmoji(
+            '🎫'
+          )
+          .setDescription(
+            'Visibilité, pings et catégories'
+          )
+          .setValue(
+            'tickets'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Giveaways'
+          )
+          .setEmoji(
+            '🎉'
+          )
+          .setDescription(
+            'Réclamations et permissions'
+          )
+          .setValue(
+            'giveaways'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Sessions RP'
+          )
+          .setEmoji(
+            '🟢'
+          )
+          .setDescription(
+            'Configurer les sessions'
+          )
+          .setValue(
+            'sessions'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Systèmes'
+          )
+          .setEmoji(
+            '⚙️'
+          )
+          .setDescription(
+            'Activer ou désactiver les systèmes'
+          )
+          .setValue(
+            'systems'
+          ),
+
+        new StringSelectMenuOptionBuilder()
+          .setLabel(
+            'Apparence'
+          )
+          .setEmoji(
+            '🎨'
+          )
+          .setDescription(
+            'Modifier la couleur'
+          )
+          .setValue(
+            'appearance'
+          )
+      );
+
+  const refresh =
+    new ButtonBuilder()
+      .setCustomId(
+        'config_refresh'
+      )
+      .setLabel(
+        'Actualiser'
+      )
+      .setEmoji(
+        '↻'
+      )
+      .setStyle(
+        ButtonStyle.Secondary
+      );
+
+  return makeContainer(
+    'Configuration de Bretagne RP',
+
+    [
+      '## Centre de configuration',
+      '',
+      'Tout est regroupé dans ce panneau.',
+      '',
+      `**Mode test :** ${
+        config.testMode
+          ? '🟢 Activé'
+          : '🔴 Désactivé'
+      }`,
+      '',
+      `**Candidatures :** ${
+        config.systems.applications
+          ? '🟢 Ouvertes'
+          : '🔴 Fermées'
+      }`,
+      `**Tickets :** ${
+        config.systems.tickets
+          ? '🟢 Actifs'
+          : '🔴 Désactivés'
+      }`,
+      `**Sécurité :** ${
+        config.systems.security
+          ? '🟢 Active'
+          : '🔴 Désactivée'
+      }`,
+      '',
+      'Sélectionne une catégorie pour continuer.'
+    ].join('\n'),
+
+    config.colors.primary,
+
+    [
+      new ActionRowBuilder()
+        .addComponents(
+          menu
+        ),
+
+      new ActionRowBuilder()
+        .addComponents(
+          refresh
+        )
+    ],
+
+    `${config.serverName} • Configuration`
+  );
+}
+
+function configCategory(
+  config,
+  category
+) {
+  const back =
+    new ButtonBuilder()
+      .setCustomId(
+        'config_back'
+      )
+      .setLabel(
+        'Retour'
+      )
+      .setEmoji(
+        '←'
+      )
+      .setStyle(
+        ButtonStyle.Secondary
+      );
+
+  let menu =
+    null;
+
+  let description =
+    '';
+
+  if (
+    category ===
+    'channels'
+  ) {
+    menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'cfg_channel_target'
+        )
+        .setPlaceholder(
+          'Quel salon modifier ?'
+        )
+        .addOptions(
+          ...[
+            ['Bienvenue', 'welcome'],
+            ['Règlement', 'rules'],
+            ['Candidatures', 'applicationLogs'],
+            ['Suggestions', 'suggestions'],
+            ['Sessions', 'sessions'],
+            ['Logs', 'logs'],
+            ['Panneau tickets', 'ticketPanel'],
+            ['Catégorie support', 'ticketCategorySupport'],
+            ['Catégorie réclamations', 'ticketCategoryClaim']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    description = [
+      'Choisis un paramètre puis un salon.',
+      '',
+      `Bienvenue : ${
+        config.channels.welcome
+          ? `<#${config.channels.welcome}>`
+          : 'Non configuré'
+      }`,
+      `Règlement : ${
+        config.channels.rules
+          ? `<#${config.channels.rules}>`
+          : 'Non configuré'
+      }`,
+      `Candidatures : ${
+        config.channels.applicationLogs
+          ? `<#${config.channels.applicationLogs}>`
+          : 'Non configuré'
+      }`,
+      `Suggestions : ${
+        config.channels.suggestions
+          ? `<#${config.channels.suggestions}>`
+          : 'Non configuré'
+      }`
+    ].join('\n');
+  }
+
+  else if (
+    category ===
+    'roles'
+  ) {
+    menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'cfg_role_target'
+        )
+        .setPlaceholder(
+          'Quel rôle modifier ?'
+        )
+        .addOptions(
+          ...[
+            ['Vérifié', 'verified'],
+            ['Staff', 'staff'],
+            ['Configuration', 'config'],
+            ['Giveaways', 'giveaways'],
+            ['Support', 'ticketSupport']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    description = [
+      `Vérifié : ${
+        config.roles.verified
+          ? `<@&${config.roles.verified}>`
+          : 'Aucun'
+      }`,
+      `Staff : ${
+        config.roles.staff
+          ? `<@&${config.roles.staff}>`
+          : 'Aucun'
+      }`,
+      `Configuration : ${
+        config.roles.config
+          ? `<@&${config.roles.config}>`
+          : 'Aucun'
+      }`,
+      `Giveaways : ${
+        config.roles.giveaways
+          ? `<@&${config.roles.giveaways}>`
+          : 'Aucun'
+      }`,
+      `Support : ${
+        config.roles.ticketSupport
+          ? `<@&${config.roles.ticketSupport}>`
+          : 'Aucun'
+      }`
+    ].join('\n');
+  }
+
+  else if (
+    category ===
+    'security'
+  ) {
+    menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'cfg_security_target'
+        )
+        .setPlaceholder(
+          'Choisir un réglage...'
+        )
+        .addOptions(
+          ...[
+            ['Anti-raid', 'antiRaid'],
+            ['Anti-spam', 'antiSpam'],
+            ['Mass mention', 'antiMassMention'],
+            ['Suppression massive', 'antiMassDelete'],
+            ['Mots interdits', 'badWords'],
+            ['Rôles bypass', 'bypass']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    description = [
+      `Anti-raid : ${bool(
+        config.systems.antiRaid
+      )}`,
+      `Anti-spam : ${bool(
+        config.systems.antiSpam
+      )}`,
+      `Mass mention : ${bool(
+        config.systems.antiMassMention
+      )}`,
+      `Suppression massive : ${bool(
+        config.systems.antiMassDelete
+      )}`,
+      `Mots interdits : ${bool(
+        config.systems.badWords
+      )}`,
+      '',
+      'Sanctions : 30s → 1m → 5m → 10m → 30m → 1h → 6h → 12h → 24h'
+    ].join('\n');
+  }
+
+  else if (
+    category ===
+    'applications'
+  ) {
+    menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'cfg_app_target'
+        )
+        .setPlaceholder(
+          'Choisir un réglage...'
+        )
+        .addOptions(
+          ...[
+            ['Ouvrir / fermer', 'toggle'],
+            ['Voir les questions', 'questions'],
+            ['Ajouter une question', 'add'],
+            ['Supprimer une question', 'remove'],
+            ['Rôle après acceptation', 'staffRole']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    description = [
+      `**État :** ${
+        config.systems.applications
+          ? '🟢 Ouvertes'
+          : '🔴 Fermées'
+      }`,
+      `**Questions :** ${
+        config.applications.questions.length
+      }`,
+      '',
+      'Fermer les candidatures désactive leur menu sans supprimer le panneau.'
+    ].join('\n');
+  }
+
+  else if (
+    category ===
+    'tickets'
+  ) {
+    menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'cfg_ticket_target'
+        )
+        .setPlaceholder(
+          'Choisir un réglage...'
+        )
+        .addOptions(
+          ...[
+            ['Support • Voir', 'support_view'],
+            ['Support • Ping', 'support_ping'],
+            ['Claim • Voir', 'claim_view'],
+            ['Claim • Ping', 'claim_ping'],
+            ['Support • Catégorie', 'support_category'],
+            ['Claim • Catégorie', 'claim_category'],
+            ['Supprimer après fermeture', 'delete']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    description = [
+      `Support • Voir : ${roleList(
+        config.tickets.support.viewRoleIds
+      )}`,
+      `Support • Ping : ${roleList(
+        config.tickets.support.pingRoleIds
+      )}`,
+      `Claim • Voir : ${roleList(
+        config.tickets.claim.viewRoleIds
+      )}`,
+      `Claim • Ping : ${roleList(
+        config.tickets.claim.pingRoleIds
+      )}`,
+      `Suppression après fermeture : ${bool(
+        config.tickets.deleteAfterClose
+      )}`
+    ].join('\n');
+  }
+
+  else if (
+    category ===
+    'giveaways'
+  ) {
+    menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'cfg_gw_target'
+        )
+        .setPlaceholder(
+          'Choisir un réglage...'
+        )
+        .addOptions(
+          new StringSelectMenuOptionBuilder()
+            .setLabel(
+              'Durée de réclamation'
+            )
+            .setValue(
+              'hours'
+            ),
+
+          new StringSelectMenuOptionBuilder()
+            .setLabel(
+              'Rôle de gestion'
+            )
+            .setValue(
+              'role'
+            )
+        );
+
+    description = [
+      `**Rôle de gestion :** ${
+        config.roles.giveaways
+          ? `<@&${config.roles.giveaways}>`
+          : 'Aucun'
+      }`,
+      `**Délai :** ${config.giveaways.claimHours}h`,
+      '',
+      'À la fin : le panneau devient **Fermer**, le bot annonce le gagnant en message normal et le gagnant dispose du délai pour réclamer.'
+    ].join('\n');
+  }
+
+  else if (
+    category ===
+    'sessions'
+  ) {
+    menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'cfg_session_target'
+        )
+        .setPlaceholder(
+          'Choisir un réglage...'
+        )
+        .addOptions(
+          new StringSelectMenuOptionBuilder()
+            .setLabel(
+              '@everyone à l’ouverture'
+            )
+            .setValue(
+              'ping'
+            ),
+
+          new StringSelectMenuOptionBuilder()
+            .setLabel(
+              'Nettoyer à la fermeture'
+            )
+            .setValue(
+              'clear'
+            )
+        );
+
+    description = [
+      `Ping : ${bool(
+        config.sessions.pingEveryone
+      )}`,
+      `Nettoyage : ${bool(
+        config.sessions.clearOnShutdown
+      )}`,
+      '',
+      'Le message d’ouverture n’a volontairement aucun bouton.'
+    ].join('\n');
+  }
+
+  else if (
+    category ===
+    'systems'
+  ) {
+    menu =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          'cfg_system_target'
+        )
+        .setPlaceholder(
+          'Choisir un système...'
+        )
+        .addOptions(
+          ...[
+            ['Bienvenue', 'welcome'],
+            ['Règlement', 'rules'],
+            ['Candidatures', 'applications'],
+            ['Giveaways', 'giveaways'],
+            ['Tickets', 'tickets'],
+            ['Suggestions', 'suggestions'],
+            ['Sessions', 'sessions'],
+            ['Sécurité', 'security'],
+            ['Anti-raid', 'antiRaid'],
+            ['Anti-spam', 'antiSpam'],
+            ['Mass mention', 'antiMassMention'],
+            ['Mass delete', 'antiMassDelete'],
+            ['Mots interdits', 'badWords']
+          ].map(
+            ([label, value]) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(value)
+          )
+        );
+
+    description =
+      Object.entries(
+        config.systems
+      )
+        .map(
+          ([key, value]) =>
+            `**${key} :** ${bool(
+              value
+            )}`
+        )
+        .join('\n');
+  }
+
+  else if (
+    category ===
+    'appearance'
+  ) {
+    const colorButton =
+      new ButtonBuilder()
+        .setCustomId(
+          'cfg_color'
+        )
+        .setLabel(
+          'Changer la couleur'
+        )
+        .setEmoji(
+          '🎨'
+        )
+        .setStyle(
+          ButtonStyle.Primary
+        );
+
+    return makeContainer(
+      'Configuration • Apparence',
+
+      `**Couleur actuelle :** #${config.colors.primary
+        .toString(16)
+        .padStart(
+          6,
+          '0'
+        )
+        .toUpperCase()}\n\n` +
+        'Cette couleur est utilisée sur les panneaux Components V2.',
+
+      config.colors.primary,
+
+      [
+        new ActionRowBuilder()
+          .addComponents(
+            colorButton
+          ),
+
+        new ActionRowBuilder()
+          .addComponents(
+            back
+          )
+      ],
+
+      `${config.serverName} • Apparence`
+    );
+  }
+
+  return makeContainer(
+    `Configuration • ${category}`,
+    description ||
+      'Sélectionne une option.',
+    config.colors.primary,
+    [
+      new ActionRowBuilder()
+        .addComponents(
+          menu
+        ),
+
+      new ActionRowBuilder()
+        .addComponents(
+          back
+        )
+    ],
+    `${config.serverName} • Configuration`
+  );
+}
+
+// ============================================================================
+// SLASH COMMANDS
+// ============================================================================
+
+const commands = [
+  new SlashCommandBuilder()
+    .setName(
+      'config'
+    )
+    .setDescription(
+      'Ouvrir la configuration de Bretagne RP'
+    ),
+
+  new SlashCommandBuilder()
+    .setName(
+      'suggestion'
+    )
+    .setDescription(
+      'Envoyer une suggestion'
+    ),
+
+  new SlashCommandBuilder()
+    .setName(
+      'giveaway'
+    )
+    .setDescription(
+      'Gérer les giveaways'
+    )
+    .addSubcommand(
+      sub =>
+        sub
+          .setName(
+            'create'
+          )
+          .setDescription(
+            'Créer un giveaway'
+          )
+          .addStringOption(
+            option =>
+              option
+                .setName(
+                  'duration'
+                )
+                .setDescription(
+                  'Ex: 30m, 2h, 1d'
+                )
+                .setRequired(
+                  true
+                )
+          )
+          .addStringOption(
+            option =>
+              option
+                .setName(
+                  'prize'
+                )
+                .setDescription(
+                  'Récompense'
+                )
+                .setRequired(
+                  true
+                )
+                .setMaxLength(
+                  300
+                )
+          )
+          .addIntegerOption(
+            option =>
+              option
+                .setName(
+                  'winners'
+                )
+                .setDescription(
+                  'Nombre de gagnants'
+                )
+                .setMinValue(
+                  1
+                )
+                .setMaxValue(
+                  100
+                )
+                .setRequired(
+                  true
+                )
+          )
+          .addRoleOption(
+            option =>
+              option
+                .setName(
+                  'role'
+                )
+                .setDescription(
+                  'Rôle requis pour participer'
+                )
+          )
+    )
+    .addSubcommand(
+      sub =>
+        sub
+          .setName(
+            'end'
+          )
+          .setDescription(
+            'Terminer un giveaway'
+          )
+          .addIntegerOption(
+            option =>
+              option
+                .setName(
+                  'id'
+                )
+                .setDescription(
+                  'ID du giveaway'
+                )
+                .setRequired(
+                  true
+                )
+          )
+    )
+    .addSubcommand(
+      sub =>
+        sub
+          .setName(
+            'reroll'
+          )
+          .setDescription(
+            'Forcer un reroll'
+          )
+          .addIntegerOption(
+            option =>
+              option
+                .setName(
+                  'id'
+                )
+                .setDescription(
+                  'ID du giveaway'
+                )
+                .setRequired(
+                  true
+                )
+          )
+    ),
+
+  new SlashCommandBuilder()
+    .setName(
+      'session'
+    )
+    .setDescription(
+      'Gérer les sessions RP'
+    )
+    .addSubcommand(
+      sub =>
+        sub
+          .setName(
+            'open'
+          )
+          .setDescription(
+            'Ouvrir une session'
+          )
+          .addStringOption(
+            option =>
+              option
+                .setName(
+                  'server-code'
+                )
+                .setDescription(
+                  'Code serveur'
+                )
+                .setRequired(
+                  true
+                )
+          )
+    )
+    .addSubcommand(
+      sub =>
+        sub
+          .setName(
+            'shutdown'
+          )
+          .setDescription(
+            'Fermer une session'
+          )
+    )
+];
+
+async function registerCommands() {
+  const rest =
+    new REST({
+      version: '10'
+    }).setToken(
+      TOKEN
+    );
+
+  const body =
+    commands.map(
+      command =>
+        command.toJSON()
+    );
+
+  if (
+    GUILD_ID
+  ) {
+    await rest.put(
+      Routes.applicationGuildCommands(
+        CLIENT_ID,
+        GUILD_ID
+      ),
+      {
+        body
+      }
+    );
+
+    return;
+  }
+
+  await rest.put(
+    Routes.applicationCommands(
+      CLIENT_ID
+    ),
+    {
+      body
+    }
+  );
+}
+
+// ============================================================================
+// CHANNEL CLEAR
+// ============================================================================
+
+async function clearChannel(
+  channel
+) {
+  for (
+    let i = 0;
+    i < 100;
+    i++
+  ) {
+    const messages =
+      await channel.messages.fetch({
+        limit: 100
+      });
+
+    if (
+      !messages.size
+    ) {
+      break;
+    }
+
+    const recent =
+      messages.filter(
+        message =>
+          Date.now() -
+            message.createdTimestamp <
+          14 *
+            24 *
+            60 *
+            60 *
+            1000
+      );
+
+    const old =
+      messages.filter(
+        message =>
+          Date.now() -
+            message.createdTimestamp >=
+          14 *
+            24 *
+            60 *
+            60 *
+            1000
+      );
+
+    if (
+      recent.size
+    ) {
+      try {
+        await channel.bulkDelete(
+          recent,
+          true
+        );
+      } catch {
+        for (
+          const message of
+          recent.values()
+        ) {
+          await message
+            .delete()
+            .catch(
+              () => {}
+            );
+        }
+      }
+    }
+
+    for (
+      const message of
+      old.values()
+    ) {
+      await message
+        .delete()
+        .catch(
+          () => {}
+        );
+    }
+
+    if (
+      messages.size <
+      100
+    ) {
+      break;
+    }
+  }
+}
+
+// ============================================================================
+// READY
+// ============================================================================
+
+client.once(
+  Events.ClientReady,
+  async ready => {
+    console.log(
+      `✅ ${ready.user.tag} est connecté`
+    );
+
+    /*
+     * Discord's Custom activity supports a state string.
+     * This makes the presence show:
+     * Developped by Nexora
+     */
+    ready.user.setPresence({
+      activities: [
+        {
+          name:
+            'Developped by Nexora',
+
+          state:
+            'Developped by Nexora',
+
+          type:
+            ActivityType.Custom
+        }
+      ],
+
+      status:
+        'online'
+    });
+
+    try {
+      await registerCommands();
+
+      console.log(
+        '✅ Commandes enregistrées'
+      );
+    } catch (
+      error
+    ) {
+      console.error(
+        '❌ Erreur commandes:',
+        error
+      );
+    }
+
+    for (
+      const guild of
+      ready.guilds.cache.values()
+    ) {
+      try {
+        await syncAllPanels(
+          guild
+        );
+
+        console.log(
+          `✅ Panels vérifiés : ${guild.name}`
+        );
+      } catch (
+        error
+      ) {
+        console.error(
+          `❌ Panel error (${guild.name}):`,
+          error.message
+        );
+      }
+    }
+
+    setInterval(
+      () =>
+        processGiveaways().catch(
+          error =>
+            console.error(
+              '❌ Giveaway loop:',
+              error
+            )
+        ),
+      5000
+    );
+  }
+);
+
+// ============================================================================
+// MEMBER JOIN
 // ============================================================================
 
 client.on(
   Events.GuildMemberAdd,
   async member => {
-    await sendWelcome(
+    await welcome(
       member
     );
 
@@ -3532,134 +4308,58 @@ client.on(
     const key =
       member.guild.id;
 
-    if (
-      !raidTracker.has(key)
-    ) {
-      raidTracker.set(
-        key,
-        []
-      );
-    }
-
-    const joins =
-      raidTracker.get(
+    const list =
+      raidMap.get(
         key
-      );
+      ) || [];
 
     const now =
       Date.now();
 
-    joins.push(
+    list.push(
       now
     );
 
     while (
-      joins.length &&
-      now - joins[0] >
-        config.security.antiRaid.windowSeconds * 1000
+      list.length &&
+      now - list[0] >
+        config.security
+          .antiRaid
+          .windowSeconds *
+          1000
     ) {
-      joins.shift();
+      list.shift();
     }
 
-    if (
-      joins.length >=
-      config.security.antiRaid.joinThreshold
-    ) {
-      if (
-        config.security.antiRaid
-          .timeoutNewMembers
-      ) {
-        const result =
-          await applyProgressiveTimeout(
-            member,
-            'Détection anti-raid'
-          );
+    raidMap.set(
+      key,
+      list
+    );
 
-        await logEvent(
-          member.guild,
-          'Détection anti-raid',
-          `${member} a rejoint pendant une activité de raid détectée.\n\n` +
-          `**Entrées détectées :** ${joins.length}\n` +
-          `**Sanction :** ${
-            result
-              ? formatDuration(
-                  result.seconds
-                )
-              : 'aucune'
-          }`,
-          0xED4245
-        );
-      }
+    if (
+      list.length >=
+      config.security
+        .antiRaid
+        .joinThreshold
+    ) {
+      await moderate(
+        member,
+        'Détection anti-raid'
+      );
     }
   }
 );
 
 // ============================================================================
-// MESSAGE LOG EVENT
-// ============================================================================
-
-async function logEvent(
-  guild,
-  title,
-  description,
-  accent = 0x5865F2
-) {
-  const config =
-    getConfig(
-      guild.id
-    );
-
-  if (
-    !config.channels.logs
-  ) {
-    return;
-  }
-
-  const channel =
-    await getTextChannel(
-      guild,
-      config.channels.logs
-    );
-
-  if (
-    !channel
-  ) {
-    return;
-  }
-
-  try {
-    await channel.send(
-      v2Message(
-        container({
-          title,
-          description,
-          accent,
-          footer:
-            `${config.serverName} • Journal`
-        })
-      )
-    );
-  } catch {}
-}
-
-// ============================================================================
-// MESSAGE SECURITY + APPLICATION DM
+// MESSAGE SECURITY
 // ============================================================================
 
 client.on(
   Events.MessageCreate,
   async message => {
-    // ------------------------------------------------------------------------
-    // DM APPLICATION FLOW
-    // ------------------------------------------------------------------------
-
     if (
       !message.guild
     ) {
-      await handleApplicationDM(
-        message
-      );
-
       return;
     }
 
@@ -3669,15 +4369,12 @@ client.on(
       return;
     }
 
-    const guild =
-      message.guild;
-
     const member =
       message.member;
 
     const config =
       getConfig(
-        guild.id
+        message.guild.id
       );
 
     if (
@@ -3686,10 +4383,7 @@ client.on(
       return;
     }
 
-    // ------------------------------------------------------------------------
     // BAD WORDS
-    // ------------------------------------------------------------------------
-
     if (
       config.systems.badWords &&
       !hasBypass(
@@ -3698,46 +4392,31 @@ client.on(
         'badWords'
       )
     ) {
-      const found =
+      const bad =
         findBadWord(
           message.content,
           config
         );
 
       if (
-        found
+        bad
       ) {
-        try {
-          await message.delete();
-        } catch {}
-
-        const result =
-          await applyProgressiveTimeout(
-            member,
-            `Mot interdit détecté : ${found}`
+        await message
+          .delete()
+          .catch(
+            () => {}
           );
 
-        if (
-          result
-        ) {
-          await logEvent(
-            guild,
-            'Mot interdit détecté',
-            `${member} a déclenché la modération automatique.\n\n` +
-            `**Niveau :** ${result.strike}\n` +
-            `**Timeout :** ${formatDuration(result.seconds)}`,
-            0xED4245
-          );
-        }
+        await moderate(
+          member,
+          `Mot interdit détecté : ${bad}`
+        );
 
         return;
       }
     }
 
-    // ------------------------------------------------------------------------
     // MASS MENTION
-    // ------------------------------------------------------------------------
-
     if (
       config.systems.antiMassMention &&
       !hasBypass(
@@ -3746,16 +4425,16 @@ client.on(
         'antiMassMention'
       )
     ) {
-      let mentions =
+      let count =
         message.mentions.users.size +
         message.mentions.roles.size;
 
       if (
         message.mentions.everyone
       ) {
-        mentions =
+        count =
           Math.max(
-            mentions,
+            count,
             config.security
               .antiMassMention
               .threshold
@@ -3763,41 +4442,27 @@ client.on(
       }
 
       if (
-        mentions >=
+        count >=
         config.security
           .antiMassMention
           .threshold
       ) {
-        try {
-          await message.delete();
-        } catch {}
-
-        const result =
-          await applyProgressiveTimeout(
-            member,
-            'Mass mention détectée'
+        await message
+          .delete()
+          .catch(
+            () => {}
           );
 
-        if (
-          result
-        ) {
-          await logEvent(
-            guild,
-            'Mass mention bloquée',
-            `${member} a utilisé trop de mentions.\n\n` +
-            `**Timeout :** ${formatDuration(result.seconds)}`,
-            0xED4245
-          );
-        }
+        await moderate(
+          member,
+          'Mass mention détectée'
+        );
 
         return;
       }
     }
 
-    // ------------------------------------------------------------------------
     // ANTI SPAM
-    // ------------------------------------------------------------------------
-
     if (
       config.systems.antiSpam &&
       !hasBypass(
@@ -3807,171 +4472,203 @@ client.on(
       )
     ) {
       const key =
-        `${guild.id}:${member.id}`;
+        `${message.guild.id}:${member.id}`;
 
-      if (
-        !spamTracker.has(key)
-      ) {
-        spamTracker.set(
-          key,
-          []
-        );
-      }
-
-      const timestamps =
-        spamTracker.get(
+      const list =
+        spamMap.get(
           key
-        );
+        ) || [];
 
       const now =
         Date.now();
 
-      timestamps.push(
+      list.push(
         now
       );
 
       while (
-        timestamps.length &&
-        now - timestamps[0] >
+        list.length &&
+        now - list[0] >
           config.security
             .antiSpam
             .windowSeconds *
             1000
       ) {
-        timestamps.shift();
+        list.shift();
       }
 
+      spamMap.set(
+        key,
+        list
+      );
+
       if (
-        timestamps.length >=
+        list.length >=
         config.security
           .antiSpam
           .messageThreshold
       ) {
-        try {
-          await message.delete();
-        } catch {}
-
-        timestamps.length = 0;
-
-        const result =
-          await applyProgressiveTimeout(
-            member,
-            'Spam détecté'
+        await message
+          .delete()
+          .catch(
+            () => {}
           );
 
-        if (
-          result
-        ) {
-          await logEvent(
-            guild,
-            'Anti-spam déclenché',
-            `${member} a été sanctionné automatiquement.\n\n` +
-            `**Timeout :** ${formatDuration(result.seconds)}`,
-            0xED4245
-          );
-        }
+        spamMap.set(
+          key,
+          []
+        );
 
-        return;
+        await moderate(
+          member,
+          'Spam détecté'
+        );
       }
     }
   }
 );
 
 // ============================================================================
-// APPLICATION DM HANDLER
+// DM APPLICATIONS
 // ============================================================================
 
-async function handleApplicationDM(
-  message
-) {
-  if (
-    message.author.bot
-  ) {
-    return;
-  }
+client.on(
+  Events.MessageCreate,
+  async message => {
+    if (
+      message.guild
+    ) {
+      return;
+    }
 
-  const application =
-    db.prepare(`
-      SELECT *
-      FROM applications
-      WHERE user_id = ?
-        AND status = 'collecting'
-      ORDER BY id DESC
-      LIMIT 1
-    `).get(
-      message.author.id
+    if (
+      message.author.bot
+    ) {
+      return;
+    }
+
+    const application =
+      db
+        .prepare(`
+          SELECT *
+          FROM applications
+          WHERE user_id=?
+            AND status='collecting'
+          ORDER BY id DESC
+          LIMIT 1
+        `)
+        .get(
+          message.author.id
+        );
+
+    if (
+      !application
+    ) {
+      return;
+    }
+
+    const config =
+      getConfig(
+        application.guild_id
+      );
+
+    if (
+      !config.systems.applications
+    ) {
+      return;
+    }
+
+    if (
+      message.content.length >
+      1000
+    ) {
+      await message.author
+        .send(
+          v2(
+            makeContainer(
+              'Réponse trop longue',
+
+              'Ta réponse dépasse la limite de 1000 caractères.',
+
+              config.colors.danger
+            )
+          )
+        )
+        .catch(
+          () => {}
+        );
+
+      return;
+    }
+
+    const answers =
+      JSON.parse(
+        application.answers ||
+          '[]'
+      );
+
+    answers.push(
+      message.content
     );
 
-  if (
-    !application
-  ) {
-    return;
-  }
+    const nextIndex =
+      application.question_index +
+      1;
 
-  const config =
-    getConfig(
-      application.guild_id
-    );
+    if (
+      nextIndex >=
+      config.applications.questions.length
+    ) {
+      db.prepare(`
+        UPDATE applications
+        SET
+          answers=?,
+          question_index=?,
+          status='pending'
+        WHERE id=?
+      `).run(
+        JSON.stringify(
+          answers
+        ),
+        nextIndex,
+        application.id
+      );
 
-  if (
-    !config.systems.applications
-  ) {
-    return;
-  }
+      await message.author
+        .send(
+          v2(
+            makeContainer(
+              'Candidature terminée',
 
-  const questions =
-    config.applications.questions;
+              'Merci pour tes réponses. Ta candidature est maintenant envoyée au Staff.',
 
-  if (
-    !questions.length
-  ) {
-    return;
-  }
+              config.colors.success
+            )
+          )
+        )
+        .catch(
+          () => {}
+        );
 
-  if (
-    message.content.length >
-    1000
-  ) {
-    await message.author.send(
-      v2Message(
-        container({
-          title:
-            'Réponse trop longue',
-          description:
-            'Ta réponse dépasse la limite de **1000 caractères**.\n\n' +
-            'Envoie une réponse plus courte.',
-          accent:
-            0xED4245
-        })
-      )
-    );
+      await finalizeApplication(
+        db
+          .prepare(
+            'SELECT * FROM applications WHERE id=?'
+          )
+          .get(
+            application.id
+          )
+      );
 
-    return;
-  }
+      return;
+    }
 
-  const answers =
-    JSON.parse(
-      application.answers || '[]'
-    );
-
-  answers.push(
-    message.content
-  );
-
-  const nextIndex =
-    application.question_index + 1;
-
-  if (
-    nextIndex >=
-    questions.length
-  ) {
     db.prepare(`
       UPDATE applications
       SET
-        answers = ?,
-        question_index = ?,
-        status = 'pending'
-      WHERE id = ?
+        answers=?,
+        question_index=?
+      WHERE id=?
     `).run(
       JSON.stringify(
         answers
@@ -3980,71 +4677,20 @@ async function handleApplicationDM(
       application.id
     );
 
-    await message.author.send(
-      v2Message(
-        container({
-          title:
-            'Candidature terminée',
-          description:
-            [
-              'Merci pour tes réponses.',
-              '',
-              'Ta candidature est maintenant envoyée au Staff.',
-              '',
-              'Tu seras contacté lorsque la décision sera prise.'
-            ].join('\n'),
-          accent:
-            0x57F287
-        })
-      )
+    await askApplication(
+      db
+        .prepare(
+          'SELECT * FROM applications WHERE id=?'
+        )
+        .get(
+          application.id
+        )
     );
-
-    const updated =
-      db.prepare(`
-        SELECT *
-        FROM applications
-        WHERE id = ?
-      `).get(
-        application.id
-      );
-
-    await finalizeApplication(
-      updated
-    );
-
-    return;
   }
-
-  db.prepare(`
-    UPDATE applications
-    SET
-      answers = ?,
-      question_index = ?
-    WHERE id = ?
-  `).run(
-    JSON.stringify(
-      answers
-    ),
-    nextIndex,
-    application.id
-  );
-
-  const updated =
-    db.prepare(`
-      SELECT *
-      FROM applications
-      WHERE id = ?
-    `).get(
-      application.id
-    );
-
-  await askApplicationQuestion(
-    updated
-  );
-}
+);
 
 // ============================================================================
-// AUDIT LOG — MASS DELETE
+// AUDIT LOG MASS DELETE
 // ============================================================================
 
 client.on(
@@ -4081,7 +4727,8 @@ client.on(
 
     const count =
       Number(
-        entry.extra?.count || 0
+        entry.extra?.count ||
+          0
       );
 
     if (
@@ -4099,1387 +4746,48 @@ client.on(
       return;
     }
 
-    try {
-      const member =
-        await guild.members.fetch(
+    const member =
+      await guild.members
+        .fetch(
           entry.executorId
+        )
+        .catch(
+          () => null
         );
 
-      if (
-        member.permissions.has(
-          PermissionFlagsBits.Administrator
-        )
-      ) {
-        return;
-      }
-
-      if (
-        hasBypass(
-          member,
-          config,
-          'antiMassDelete'
-        )
-      ) {
-        return;
-      }
-
-      const result =
-        await applyProgressiveTimeout(
-          member,
-          'Suppression massive de messages'
-        );
-
-      if (
-        result
-      ) {
-        await logEvent(
-          guild,
-          'Suppression massive détectée',
-          `${member} a supprimé massivement des messages.\n\n` +
-          `**Nombre détecté :** ${count}\n` +
-          `**Timeout :** ${formatDuration(result.seconds)}`,
-          0xED4245
-        );
-      }
-    } catch {}
-  }
-);
-
-// ============================================================================
-// COMMANDS
-// ============================================================================
-
-const commands = [
-  // --------------------------------------------------------------------------
-  // /config
-  // --------------------------------------------------------------------------
-
-  new SlashCommandBuilder()
-    .setName('config')
-    .setDescription(
-      'Ouvrir la configuration interactive de Bretagne RP'
-    ),
-
-  // --------------------------------------------------------------------------
-  // /suggestion
-  // --------------------------------------------------------------------------
-
-  new SlashCommandBuilder()
-    .setName('suggestion')
-    .setDescription(
-      'Envoyer une suggestion'
-    ),
-
-  // --------------------------------------------------------------------------
-  // /giveaway
-  // --------------------------------------------------------------------------
-
-  new SlashCommandBuilder()
-    .setName('giveaway')
-    .setDescription(
-      'Gestion des giveaways'
-    )
-    .addSubcommand(
-      sub =>
-        sub
-          .setName('create')
-          .setDescription(
-            'Créer un giveaway'
-          )
-          .addStringOption(
-            option =>
-              option
-                .setName('duration')
-                .setDescription(
-                  'Ex: 30m, 2h, 1d'
-                )
-                .setRequired(true)
-          )
-          .addStringOption(
-            option =>
-              option
-                .setName('prize')
-                .setDescription(
-                  'Récompense'
-                )
-                .setRequired(true)
-                .setMaxLength(300)
-          )
-          .addIntegerOption(
-            option =>
-              option
-                .setName('winners')
-                .setDescription(
-                  'Nombre de gagnants'
-                )
-                .setRequired(true)
-                .setMinValue(1)
-                .setMaxValue(100)
-          )
-          .addRoleOption(
-            option =>
-              option
-                .setName('role')
-                .setDescription(
-                  'Rôle requis pour participer'
-                )
-          )
-    )
-    .addSubcommand(
-      sub =>
-        sub
-          .setName('end')
-          .setDescription(
-            'Terminer immédiatement un giveaway'
-          )
-          .addIntegerOption(
-            option =>
-              option
-                .setName('id')
-                .setDescription(
-                  'ID du giveaway'
-                )
-                .setRequired(true)
-          )
-    )
-    .addSubcommand(
-      sub =>
-        sub
-          .setName('reroll')
-          .setDescription(
-            'Forcer un reroll'
-          )
-          .addIntegerOption(
-            option =>
-              option
-                .setName('id')
-                .setDescription(
-                  'ID du giveaway'
-                )
-                .setRequired(true)
-          )
-    ),
-
-  // --------------------------------------------------------------------------
-  // /session
-  // --------------------------------------------------------------------------
-
-  new SlashCommandBuilder()
-    .setName('session')
-    .setDescription(
-      'Gestion des sessions RP'
-    )
-    .addSubcommand(
-      sub =>
-        sub
-          .setName('open')
-          .setDescription(
-            'Ouvrir une session RP'
-          )
-          .addStringOption(
-            option =>
-              option
-                .setName('server-code')
-                .setDescription(
-                  'Code du serveur'
-                )
-                .setRequired(true)
-          )
-    )
-    .addSubcommand(
-      sub =>
-        sub
-          .setName('shutdown')
-          .setDescription(
-            'Fermer une session RP'
-          )
-    )
-];
-
-// ============================================================================
-// /CONFIG HOME
-// ============================================================================
-
-function buildConfigHome(
-  config
-) {
-  const menu =
-    new StringSelectMenuBuilder()
-      .setCustomId(
-        'config_category'
-      )
-      .setPlaceholder(
-        'Choisir une catégorie...'
-      )
-      .addOptions(
-        new StringSelectMenuOptionBuilder()
-          .setLabel(
-            'Salons'
-          )
-          .setEmoji('📁')
-          .setDescription(
-            'Configurer les salons'
-          )
-          .setValue(
-            'channels'
-          ),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel(
-            'Rôles'
-          )
-          .setEmoji('👥')
-          .setDescription(
-            'Configurer les rôles'
-          )
-          .setValue(
-            'roles'
-          ),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel(
-            'Sécurité'
-          )
-          .setEmoji('🛡️')
-          .setDescription(
-            'Configurer les protections'
-          )
-          .setValue(
-            'security'
-          ),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel(
-            'Candidatures'
-          )
-          .setEmoji('📋')
-          .setDescription(
-            'Configurer le recrutement'
-          )
-          .setValue(
-            'applications'
-          ),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel(
-            'Tickets'
-          )
-          .setEmoji('🎫')
-          .setDescription(
-            'Visibilité et pings par type'
-          )
-          .setValue(
-            'tickets'
-          ),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel(
-            'Giveaways'
-          )
-          .setEmoji('🎉')
-          .setDescription(
-            'Configurer les giveaways'
-          )
-          .setValue(
-            'giveaways'
-          ),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel(
-            'Sessions RP'
-          )
-          .setEmoji('🟢')
-          .setDescription(
-            'Configurer les sessions'
-          )
-          .setValue(
-            'sessions'
-          ),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel(
-            'Systèmes'
-          )
-          .setEmoji('⚙️')
-          .setDescription(
-            'Activer ou fermer des systèmes'
-          )
-          .setValue(
-            'systems'
-          ),
-
-        new StringSelectMenuOptionBuilder()
-          .setLabel(
-            'Apparence'
-          )
-          .setEmoji('🎨')
-          .setDescription(
-            'Couleurs et identité'
-          )
-          .setValue(
-            'appearance'
-          )
-      );
-
-  const refresh =
-    new ButtonBuilder()
-      .setCustomId(
-        'config_refresh'
-      )
-      .setLabel(
-        'Actualiser'
-      )
-      .setEmoji('↻')
-      .setStyle(
-        ButtonStyle.Secondary
-      );
-
-  return container({
-    title:
-      'Configuration de Bretagne RP',
-
-    description:
-      [
-        '## Centre de configuration',
-        '',
-        'Tout est regroupé ici afin d’éviter une dizaine de commandes différentes.',
-        '',
-        `**Mode test :** ${
-          config.testMode
-            ? '🟢 Activé'
-            : '🔴 Désactivé'
-        }`,
-        '',
-        `**Candidatures :** ${
-          config.systems.applications
-            ? '🟢 Ouvertes'
-            : '🔴 Fermées'
-        }`,
-        `**Tickets :** ${
-          config.systems.tickets
-            ? '🟢 Actifs'
-            : '🔴 Désactivés'
-        }`,
-        `**Sécurité :** ${
-          config.systems.security
-            ? '🟢 Active'
-            : '🔴 Désactivée'
-        }`,
-        '',
-        'Choisis une catégorie dans le menu pour modifier le bot.'
-      ].join('\n'),
-
-    accent:
-      config.appearance.accentColor,
-
-    rows: [
-      new ActionRowBuilder()
-        .addComponents(
-          menu
-        ),
-      new ActionRowBuilder()
-        .addComponents(
-          refresh
-        )
-    ],
-
-    footer:
-      `${config.serverName} • Configuration`
-  });
-}
-
-// ============================================================================
-// CONFIG CATEGORY
-// ============================================================================
-
-function configCategoryView(
-  config,
-  category
-) {
-  const back =
-    new ButtonBuilder()
-      .setCustomId(
-        'config_back'
-      )
-      .setLabel(
-        'Retour'
-      )
-      .setEmoji('←')
-      .setStyle(
-        ButtonStyle.Secondary
-      );
-
-  // --------------------------------------------------------------------------
-  // CHANNELS
-  // --------------------------------------------------------------------------
-
-  if (
-    category === 'channels'
-  ) {
-    const menu =
-      new StringSelectMenuBuilder()
-        .setCustomId(
-          'config_channel_target'
-        )
-        .setPlaceholder(
-          'Choisir quel salon modifier...'
-        )
-        .addOptions(
-          [
-            ['Bienvenue', 'welcome'],
-            ['Règlement', 'rules'],
-            ['Candidatures', 'applicationLogs'],
-            ['Suggestions', 'suggestions'],
-            ['Sessions', 'sessions'],
-            ['Logs', 'logs'],
-            ['Panneau tickets', 'ticketPanel'],
-            ['Catégorie tickets support', 'ticketCategorySupport'],
-            ['Catégorie réclamations', 'ticketCategoryGiveawayClaim']
-          ].map(
-            ([label, value]) =>
-              new StringSelectMenuOptionBuilder()
-                .setLabel(label)
-                .setValue(value)
-          )
-        );
-
-    return container({
-      title:
-        'Configuration • Salons',
-
-      description:
-        [
-          'Choisis un paramètre puis sélectionne le salon directement.',
-          '',
-          `**Bienvenue :** ${
-            config.channels.welcome
-              ? `<#${config.channels.welcome}>`
-              : 'Non configuré'
-          }`,
-          `**Règlement :** ${
-            config.channels.rules
-              ? `<#${config.channels.rules}>`
-              : 'Non configuré'
-          }`,
-          `**Candidatures :** ${
-            config.channels.applicationLogs
-              ? `<#${config.channels.applicationLogs}>`
-              : 'Non configuré'
-          }`,
-          `**Suggestions :** ${
-            config.channels.suggestions
-              ? `<#${config.channels.suggestions}>`
-              : 'Non configuré'
-          }`,
-          `**Sessions :** ${
-            config.channels.sessions
-              ? `<#${config.channels.sessions}>`
-              : 'Même salon que la commande'
-          }`
-        ].join('\n'),
-
-      accent:
-        config.appearance.accentColor,
-
-      rows: [
-        new ActionRowBuilder()
-          .addComponents(
-            menu
-          ),
-        new ActionRowBuilder()
-          .addComponents(
-            back
-          )
-      ],
-
-      footer:
-        'Clique sur un paramètre puis choisis le salon.'
-    });
-  }
-
-  // --------------------------------------------------------------------------
-  // ROLES
-  // --------------------------------------------------------------------------
-
-  if (
-    category === 'roles'
-  ) {
-    const menu =
-      new StringSelectMenuBuilder()
-        .setCustomId(
-          'config_role_target'
-        )
-        .setPlaceholder(
-          'Choisir quel rôle modifier...'
-        )
-        .addOptions(
-          [
-            ['Rôle vérifié', 'verified'],
-            ['Rôle Staff', 'staff'],
-            ['Rôle Configuration', 'config'],
-            ['Rôle Giveaways', 'giveaways'],
-            ['Rôle Support', 'ticketSupport']
-          ].map(
-            ([label, value]) =>
-              new StringSelectMenuOptionBuilder()
-                .setLabel(label)
-                .setValue(value)
-          )
-        );
-
-    return container({
-      title:
-        'Configuration • Rôles',
-
-      description:
-        [
-          'Choisis le paramètre puis sélectionne le rôle.',
-          '',
-          `**Vérifié :** ${
-            config.roles.verified
-              ? `<@&${config.roles.verified}>`
-              : 'Non configuré'
-          }`,
-          `**Staff :** ${
-            config.roles.staff
-              ? `<@&${config.roles.staff}>`
-              : 'Non configuré'
-          }`,
-          `**Configuration :** ${
-            config.roles.config
-              ? `<@&${config.roles.config}>`
-              : 'Non configuré'
-          }`,
-          `**Giveaways :** ${
-            config.roles.giveaways
-              ? `<@&${config.roles.giveaways}>`
-              : 'Non configuré'
-          }`,
-          `**Support :** ${
-            config.roles.ticketSupport
-              ? `<@&${config.roles.ticketSupport}>`
-              : 'Non configuré'
-          }`
-        ].join('\n'),
-
-      accent:
-        config.appearance.accentColor,
-
-      rows: [
-        new ActionRowBuilder()
-          .addComponents(
-            menu
-          ),
-        new ActionRowBuilder()
-          .addComponents(
-            back
-          )
-      ],
-
-      footer:
-        'Sélection de rôle native Discord.'
-    });
-  }
-
-  // --------------------------------------------------------------------------
-  // SECURITY
-  // --------------------------------------------------------------------------
-
-  if (
-    category === 'security'
-  ) {
-    const menu =
-      new StringSelectMenuBuilder()
-        .setCustomId(
-          'config_security_target'
-        )
-        .setPlaceholder(
-          'Choisir une fonction...'
-        )
-        .addOptions(
-          [
-            ['Anti-raid', 'antiRaid'],
-            ['Anti-spam', 'antiSpam'],
-            ['Mass mention', 'antiMassMention'],
-            ['Suppression massive', 'antiMassDelete'],
-            ['Mots interdits', 'badWords'],
-            ['Ajouter un rôle bypass', 'bypass']
-          ].map(
-            ([label, value]) =>
-              new StringSelectMenuOptionBuilder()
-                .setLabel(label)
-                .setValue(value)
-          )
-        );
-
-    return container({
-      title:
-        'Configuration • Sécurité',
-
-      description:
-        [
-          'Configure les systèmes de protection et les rôles pouvant les bypass.',
-          '',
-          `**Anti-raid :** ${
-            config.systems.antiRaid
-              ? '🟢'
-              : '🔴'
-          }`,
-          `**Anti-spam :** ${
-            config.systems.antiSpam
-              ? '🟢'
-              : '🔴'
-          }`,
-          `**Mass mention :** ${
-            config.systems.antiMassMention
-              ? '🟢'
-              : '🔴'
-          }`,
-          `**Suppression massive :** ${
-            config.systems.antiMassDelete
-              ? '🟢'
-              : '🔴'
-          }`,
-          `**Mots interdits :** ${
-            config.systems.badWords
-              ? '🟢'
-              : '🔴'
-          }`,
-          '',
-          'Les sanctions augmentent progressivement pendant la journée.'
-        ].join('\n'),
-
-      accent:
-        config.appearance.dangerColor,
-
-      rows: [
-        new ActionRowBuilder()
-          .addComponents(
-            menu
-          ),
-        new ActionRowBuilder()
-          .addComponents(
-            back
-          )
-      ],
-
-      footer:
-        `${config.serverName} • Sécurité`
-    });
-  }
-
-  // --------------------------------------------------------------------------
-  // APPLICATIONS
-  // --------------------------------------------------------------------------
-
-  if (
-    category === 'applications'
-  ) {
-    const menu =
-      new StringSelectMenuBuilder()
-        .setCustomId(
-          'config_application_target'
-        )
-        .setPlaceholder(
-          'Choisir un réglage...'
-        )
-        .addOptions(
-          [
-            ['Ouvrir / fermer les candidatures', 'toggle'],
-            ['Voir les questions', 'questions'],
-            ['Ajouter une question', 'add'],
-            ['Supprimer une question', 'remove'],
-            ['Rôle Staff après acceptation', 'staffRole']
-          ].map(
-            ([label, value]) =>
-              new StringSelectMenuOptionBuilder()
-                .setLabel(label)
-                .setValue(value)
-          )
-        );
-
-    return container({
-      title:
-        'Configuration • Candidatures',
-
-      description:
-        [
-          `**État :** ${
-            config.systems.applications
-              ? '🟢 Ouvertes'
-              : '🔴 Fermées'
-          }`,
-          '',
-          `**Questions actuelles :** ${config.applications.questions.length}`,
-          '',
-          'Tu peux fermer temporairement les candidatures sans supprimer le panneau.',
-          '',
-          'Le panneau se mettra automatiquement à jour.'
-        ].join('\n'),
-
-      accent:
-        config.systems.applications
-          ? config.appearance.accentColor
-          : config.appearance.dangerColor,
-
-      rows: [
-        new ActionRowBuilder()
-          .addComponents(
-            menu
-          ),
-        new ActionRowBuilder()
-          .addComponents(
-            back
-          )
-      ],
-
-      footer:
-        'Recrutement Staff'
-    });
-  }
-
-  // --------------------------------------------------------------------------
-  // TICKETS
-  // --------------------------------------------------------------------------
-
-  if (
-    category === 'tickets'
-  ) {
-    const menu =
-      new StringSelectMenuBuilder()
-        .setCustomId(
-          'config_ticket_target'
-        )
-        .setPlaceholder(
-          'Choisir ce que tu veux configurer...'
-        )
-        .addOptions(
-          [
-            ['Support • Voir', 'support_view'],
-            ['Support • Ping', 'support_ping'],
-            ['Giveaway • Voir', 'claim_view'],
-            ['Giveaway • Ping', 'claim_ping'],
-            ['Support • Catégorie', 'support_category'],
-            ['Giveaway • Catégorie', 'claim_category'],
-            ['Suppression après fermeture', 'delete']
-          ].map(
-            ([label, value]) =>
-              new StringSelectMenuOptionBuilder()
-                .setLabel(label)
-                .setValue(value)
-          )
-        );
-
-    return container({
-      title:
-        'Configuration • Tickets',
-
-      description:
-        [
-          'Chaque type de ticket peut avoir sa propre visibilité et son propre ping.',
-          '',
-          '### 🎫 Support',
-          `**Voir :** ${formatRoleList(config.tickets.support.viewRoleIds)}`,
-          `**Ping :** ${formatRoleList(config.tickets.support.pingRoleIds)}`,
-          '',
-          '### 🏆 Giveaway • Réclamation',
-          `**Voir :** ${formatRoleList(config.tickets.giveawayClaim.viewRoleIds)}`,
-          `**Ping :** ${formatRoleList(config.tickets.giveawayClaim.pingRoleIds)}`,
-          '',
-          `**Suppression automatique :** ${
-            config.tickets.deleteAfterClose
-              ? '🟢'
-              : '🔴'
-          }`
-        ].join('\n'),
-
-      accent:
-        config.appearance.accentColor,
-
-      rows: [
-        new ActionRowBuilder()
-          .addComponents(
-            menu
-          ),
-        new ActionRowBuilder()
-          .addComponents(
-            back
-          )
-      ],
-
-      footer:
-        'Visibilité et notifications par type'
-    });
-  }
-
-  // --------------------------------------------------------------------------
-  // GIVEAWAYS
-  // --------------------------------------------------------------------------
-
-  if (
-    category === 'giveaways'
-  ) {
-    const backButton = back;
-
-    const menu =
-      new StringSelectMenuBuilder()
-        .setCustomId(
-          'config_giveaway_target'
-        )
-        .setPlaceholder(
-          'Choisir un réglage...'
-        )
-        .addOptions(
-          [
-            ['Durée de réclamation', 'claim_hours'],
-            ['Rôle Giveaway', 'role'],
-            ['Voir les options', 'summary']
-          ].map(
-            ([label, value]) =>
-              new StringSelectMenuOptionBuilder()
-                .setLabel(label)
-                .setValue(value)
-          )
-        );
-
-    return container({
-      title:
-        'Configuration • Giveaways',
-
-      description:
-        [
-          `**Rôle de gestion :** ${
-            config.roles.giveaways
-              ? `<@&${config.roles.giveaways}>`
-              : 'Non configuré'
-          }`,
-          '',
-          `**Réclamation :** ${config.giveaways.claimHours} heures`,
-          '',
-          'Lorsqu’un giveaway termine :',
-          '→ le message devient **Fermer**',
-          '→ le bot annonce le gagnant en message normal',
-          '→ le gagnant dispose du délai configuré',
-          '→ ouvrir le ticket de réclamation arrête le compteur',
-          '→ sinon le bot reroll automatiquement'
-        ].join('\n'),
-
-      accent:
-        config.appearance.warningColor,
-
-      rows: [
-        new ActionRowBuilder()
-          .addComponents(
-            menu
-          ),
-        new ActionRowBuilder()
-          .addComponents(
-            backButton
-          )
-      ],
-
-      footer:
-        'Gestion des giveaways'
-    });
-  }
-
-  // --------------------------------------------------------------------------
-  // SESSIONS
-  // --------------------------------------------------------------------------
-
-  if (
-    category === 'sessions'
-  ) {
-    const menu =
-      new StringSelectMenuBuilder()
-        .setCustomId(
-          'config_session_target'
-        )
-        .setPlaceholder(
-          'Choisir un réglage...'
-        )
-        .addOptions(
-          [
-            ['Ping @everyone', 'ping'],
-            ['Nettoyer à la fermeture', 'clear'],
-            ['Voir la configuration', 'summary']
-          ].map(
-            ([label, value]) =>
-              new StringSelectMenuOptionBuilder()
-                .setLabel(label)
-                .setValue(value)
-          )
-        );
-
-    return container({
-      title:
-        'Configuration • Sessions RP',
-
-      description:
-        [
-          `**Salon :** ${
-            config.channels.sessions
-              ? `<#${config.channels.sessions}>`
-              : 'Même salon que la commande'
-          }`,
-          '',
-          `**Ping @everyone :** ${
-            config.sessions.autoPingEveryone
-              ? '🟢'
-              : '🔴'
-          }`,
-          `**Nettoyage shutdown :** ${
-            config.sessions.clearOnShutdown
-              ? '🟢'
-              : '🔴'
-          }`,
-          '',
-          'Le panneau d’ouverture n’a volontairement aucun bouton.'
-        ].join('\n'),
-
-      accent:
-        config.appearance.successColor,
-
-      rows: [
-        new ActionRowBuilder()
-          .addComponents(
-            menu
-          ),
-        new ActionRowBuilder()
-          .addComponents(
-            back
-          )
-      ],
-
-      footer:
-        'Sessions RP'
-    });
-  }
-
-  // --------------------------------------------------------------------------
-  // SYSTEMS
-  // --------------------------------------------------------------------------
-
-  if (
-    category === 'systems'
-  ) {
-    const menu =
-      new StringSelectMenuBuilder()
-        .setCustomId(
-          'config_system_target'
-        )
-        .setPlaceholder(
-          'Choisir un système...'
-        )
-        .addOptions(
-          [
-            ['Bienvenue', 'welcome'],
-            ['Règlement', 'rules'],
-            ['Candidatures', 'applications'],
-            ['Giveaways', 'giveaways'],
-            ['Tickets', 'tickets'],
-            ['Suggestions', 'suggestions'],
-            ['Sessions', 'sessions'],
-            ['Sécurité', 'security'],
-            ['Anti-raid', 'antiRaid'],
-            ['Anti-spam', 'antiSpam'],
-            ['Mass mention', 'antiMassMention'],
-            ['Suppression massive', 'antiMassDelete'],
-            ['Mots interdits', 'badWords']
-          ].map(
-            ([label, value]) =>
-              new StringSelectMenuOptionBuilder()
-                .setLabel(label)
-                .setValue(value)
-          )
-        );
-
-    return container({
-      title:
-        'Configuration • Systèmes',
-
-      description:
-        [
-          'Les systèmes peuvent être ouverts ou fermés individuellement.',
-          '',
-          `Bienvenue : ${boolState(config.systems.welcome)}`,
-          `Règlement : ${boolState(config.systems.rules)}`,
-          `Candidatures : ${boolState(config.systems.applications)}`,
-          `Giveaways : ${boolState(config.systems.giveaways)}`,
-          `Tickets : ${boolState(config.systems.tickets)}`,
-          `Suggestions : ${boolState(config.systems.suggestions)}`,
-          `Sessions : ${boolState(config.systems.sessions)}`,
-          `Sécurité : ${boolState(config.systems.security)}`
-        ].join('\n'),
-
-      accent:
-        config.appearance.accentColor,
-
-      rows: [
-        new ActionRowBuilder()
-          .addComponents(
-            menu
-          ),
-        new ActionRowBuilder()
-          .addComponents(
-            back
-          )
-      ],
-
-      footer:
-        'Activation / fermeture des systèmes'
-    });
-  }
-
-  // --------------------------------------------------------------------------
-  // APPEARANCE
-  // --------------------------------------------------------------------------
-
-  if (
-    category === 'appearance'
-  ) {
-    const button =
-      new ButtonBuilder()
-        .setCustomId(
-          'config_change_color'
-        )
-        .setLabel(
-          'Changer la couleur'
-        )
-        .setEmoji('🎨')
-        .setStyle(
-          ButtonStyle.Primary
-        );
-
-    return container({
-      title:
-        'Configuration • Apparence',
-
-      description:
-        [
-          `**Couleur actuelle :** #${config.appearance.accentColor
-            .toString(16)
-            .padStart(6, '0')
-            .toUpperCase()}`,
-          '',
-          'Cette couleur est utilisée comme accent principal des panneaux Components V2.'
-        ].join('\n'),
-
-      accent:
-        config.appearance.accentColor,
-
-      rows: [
-        new ActionRowBuilder()
-          .addComponents(
-            button
-          ),
-        new ActionRowBuilder()
-          .addComponents(
-            back
-          )
-      ],
-
-      footer:
-        'Identité visuelle'
-    });
-  }
-
-  return container({
-    title:
-      'Configuration',
-    description:
-      'Catégorie inconnue.',
-    accent:
-      config.appearance.dangerColor,
-    rows: [
-      new ActionRowBuilder()
-        .addComponents(
-          back
-        )
-    ]
-  });
-}
-
-function boolState(
-  value
-) {
-  return value
-    ? '🟢 Activé'
-    : '🔴 Désactivé';
-}
-
-function formatRoleList(
-  roleIds
-) {
-  if (
-    !roleIds?.length
-  ) {
-    return 'Aucun rôle configuré';
-  }
-
-  return roleIds
-    .map(
-      roleId =>
-        `<@&${roleId}>`
-    )
-    .join(', ');
-}
-
-// ============================================================================
-// CONFIG ROLE PICKER
-// ============================================================================
-
-function buildRolePicker(
-  customId,
-  placeholder,
-  maxValues = 10
-) {
-  return new RoleSelectMenuBuilder()
-    .setCustomId(
-      customId
-    )
-    .setPlaceholder(
-      placeholder
-    )
-    .setMinValues(
-      0
-    )
-    .setMaxValues(
-      maxValues
-    );
-}
-
-// ============================================================================
-// CONFIG CHANNEL PICKER
-// ============================================================================
-
-function buildChannelPicker(
-  customId,
-  placeholder
-) {
-  return new ChannelSelectMenuBuilder()
-    .setCustomId(
-      customId
-    )
-    .setPlaceholder(
-      placeholder
-    )
-    .setMinValues(
-      1
-    )
-    .setMaxValues(
-      1
-    )
-    .setChannelTypes(
-      ChannelType.GuildText,
-      ChannelType.GuildAnnouncement,
-      ChannelType.GuildCategory
-    );
-}
-
-// ============================================================================
-// CONFIG INTERACTION ACCESS
-// ============================================================================
-
-function configAccessAllowed(
-  interaction
-) {
-  const config =
-    getConfig(
-      interaction.guild.id
-    );
-
-  /*
-   * During testing, no role restriction is enforced.
-   */
-  if (
-    config.testMode
-  ) {
-    return true;
-  }
-
-  return roleRestrictionPasses(
-    interaction.member,
-    config,
-    config.roles.config
-  );
-}
-
-function giveawayAccessAllowed(
-  interaction
-) {
-  const config =
-    getConfig(
-      interaction.guild.id
-    );
-
-  /*
-   * During testing, no role restriction is enforced.
-   */
-  if (
-    config.testMode
-  ) {
-    return true;
-  }
-
-  return roleRestrictionPasses(
-    interaction.member,
-    config,
-    config.roles.giveaways
-  );
-}
-
-// ============================================================================
-// READY
-// ============================================================================
-
-client.once(
-  Events.ClientReady,
-  async ready => {
-    console.log('');
-    console.log(
-      '══════════════════════════════════════════════'
-    );
-    console.log(
-      `✅ ${ready.user.tag} est connecté`
-    );
-    console.log(
-      `🏠 Serveurs : ${ready.guilds.cache.size}`
-    );
-    console.log(
-      '🧩 Components V2 : actif'
-    );
-    console.log(
-      '🧠 SQLite : actif'
-    );
-    console.log(
-      '🛡️ Sécurité : actif'
-    );
-    console.log(
-      '🎉 Giveaways : actif'
-    );
-    console.log(
-      '🎫 Tickets multi-types : actif'
-    );
-    console.log(
-      '🇫🇷 Bretagne RP : actif'
-    );
-    console.log(
-      '══════════════════════════════════════════════'
-    );
-    console.log('');
-
-    try {
-      await registerCommands();
-    } catch (
-      error
+    if (
+      !member
     ) {
-      console.error(
-        '❌ Erreur registration commandes:',
-        error
-      );
+      return;
     }
 
-    for (
-      const guild of ready.guilds.cache.values()
+    if (
+      member.permissions.has(
+        PermissionFlagsBits.Administrator
+      )
     ) {
-      try {
-        await syncAllPanels(
-          guild
-        );
-
-        console.log(
-          `✅ Panels vérifiés : ${guild.name}`
-        );
-      } catch (
-        error
-      ) {
-        console.error(
-          `❌ Panel error (${guild.name}):`,
-          error.message
-        );
-      }
+      return;
     }
 
-    /*
-     * Giveaways run every 5 seconds.
-     */
-    setInterval(
-      () =>
-        processGiveaways()
-          .catch(
-            error =>
-              console.error(
-                'Giveaway loop:',
-                error
-              )
-          ),
-      5000
+    if (
+      hasBypass(
+        member,
+        config,
+        'antiMassDelete'
+      )
+    ) {
+      return;
+    }
+
+    await moderate(
+      member,
+      'Suppression massive de messages'
     );
   }
 );
 
 // ============================================================================
-// COMMAND REGISTRATION
-// ============================================================================
-
-async function registerCommands() {
-  const rest =
-    new REST({
-      version: '10'
-    }).setToken(
-      TOKEN
-    );
-
-  const body =
-    commands.map(
-      command =>
-        command.toJSON()
-    );
-
-  if (
-    GUILD_ID
-  ) {
-    await rest.put(
-      Routes.applicationGuildCommands(
-        CLIENT_ID,
-        GUILD_ID
-      ),
-      {
-        body
-      }
-    );
-
-    console.log(
-      `✅ Commandes enregistrées sur ${GUILD_ID}`
-    );
-
-    return;
-  }
-
-  await rest.put(
-    Routes.applicationCommands(
-      CLIENT_ID
-    ),
-    {
-      body
-    }
-  );
-
-  console.log(
-    '✅ Commandes globales enregistrées'
-  );
-}
-
-// ============================================================================
-// MAIN INTERACTION HANDLER
-// ============================================================================
-//
-// IMPORTANT:
-// This is intentionally ONE handler.
-// The previous structure split interaction logic over multiple listeners,
-// which made debugging "application did not respond" much harder.
-//
+// INTERACTIONS
 // ============================================================================
 
 client.on(
@@ -5494,7 +4802,7 @@ client.on(
         interaction.isChatInputCommand()
       ) {
         // --------------------------------------------------------------------
-        // /CONFIG
+        // CONFIG
         // --------------------------------------------------------------------
 
         if (
@@ -5502,34 +4810,32 @@ client.on(
           'config'
         ) {
           if (
-            !configAccessAllowed(
-              interaction
+            !allowedByRole(
+              interaction,
+              getConfig(
+                interaction.guild.id
+              ).roles.config
             )
           ) {
-            return textReply(
+            return replyText(
               interaction,
               '❌ Tu n’as pas accès à la configuration.'
             );
           }
 
-          /*
-           * Immediate response.
-           * This is the important part for the old
-           * "application did not respond" problem.
-           */
-          return v2Reply(
-            interaction,
-            buildConfigHome(
-              getConfig(
-                interaction.guild.id
+          return interaction.reply(
+            v2(
+              configHome(
+                getConfig(
+                  interaction.guild.id
+                )
               )
-            ),
-            false
+            )
           );
         }
 
         // --------------------------------------------------------------------
-        // /SUGGESTION
+        // SUGGESTION
         // --------------------------------------------------------------------
 
         if (
@@ -5544,9 +4850,9 @@ client.on(
           if (
             !config.systems.suggestions
           ) {
-            return textReply(
+            return replyText(
               interaction,
-              '❌ Le système de suggestions est actuellement désactivé.'
+              '❌ Les suggestions sont désactivées.'
             );
           }
 
@@ -5562,16 +4868,13 @@ client.on(
           const input =
             new TextInputBuilder()
               .setCustomId(
-                'suggestion_text'
+                'text'
               )
               .setLabel(
                 'Ta suggestion'
               )
               .setStyle(
                 TextInputStyle.Paragraph
-              )
-              .setPlaceholder(
-                'Explique ton idée clairement...'
               )
               .setRequired(
                 true
@@ -5593,27 +4896,13 @@ client.on(
         }
 
         // --------------------------------------------------------------------
-        // /GIVEAWAY
+        // GIVEAWAYS
         // --------------------------------------------------------------------
 
         if (
           interaction.commandName ===
           'giveaway'
         ) {
-          if (
-            !giveawayAccessAllowed(
-              interaction
-            )
-          ) {
-            return textReply(
-              interaction,
-              '❌ Tu n’as pas accès à la gestion des giveaways.'
-            );
-          }
-
-          const subcommand =
-            interaction.options.getSubcommand();
-
           const config =
             getConfig(
               interaction.guild.id
@@ -5622,115 +4911,120 @@ client.on(
           if (
             !config.systems.giveaways
           ) {
-            return textReply(
+            return replyText(
               interaction,
-              '❌ Le système de giveaways est désactivé.'
+              '❌ Les giveaways sont désactivés.'
             );
           }
 
-          // ------------------------------------------------------------------
-          // CREATE
-          // ------------------------------------------------------------------
+          if (
+            !allowedByRole(
+              interaction,
+              config.roles.giveaways
+            )
+          ) {
+            return replyText(
+              interaction,
+              '❌ Tu n’as pas accès à la gestion des giveaways.'
+            );
+          }
+
+          const subcommand =
+            interaction.options
+              .getSubcommand();
 
           if (
             subcommand ===
             'create'
           ) {
-            const durationInput =
-              interaction.options.getString(
-                'duration'
-              );
-
-            const prize =
-              interaction.options.getString(
-                'prize'
-              );
-
-            const winners =
-              interaction.options.getInteger(
-                'winners'
-              );
-
-            const role =
-              interaction.options.getRole(
-                'role'
-              );
+            const duration =
+              interaction.options
+                .getString(
+                  'duration'
+                );
 
             const durationMs =
               parseDuration(
-                durationInput
+                duration
               );
 
             if (
-              !durationMs
-            ) {
-              return textReply(
-                interaction,
-                '❌ Durée invalide. Utilise par exemple `30m`, `2h`, `1d`.'
-              );
-            }
-
-            if (
+              !durationMs ||
               durationMs <
-              config.giveaways
-                .minimumDurationSeconds *
-                1000
+                config.giveaways
+                  .minimumDurationSeconds *
+                  1000
             ) {
-              return textReply(
+              return replyText(
                 interaction,
-                `❌ La durée minimum est de ${config.giveaways.minimumDurationSeconds} secondes.`
+                '❌ Durée invalide. Exemple : `30m`, `2h`, `1d`.'
               );
             }
+
+            const prize =
+              interaction.options
+                .getString(
+                  'prize'
+                );
+
+            const winners =
+              interaction.options
+                .getInteger(
+                  'winners'
+                );
+
+            const role =
+              interaction.options
+                .getRole(
+                  'role'
+                );
 
             const endAt =
               Date.now() +
               durationMs;
 
             const result =
-              db.prepare(`
-                INSERT INTO giveaways (
-                  guild_id,
-                  channel_id,
-                  message_id,
+              db
+                .prepare(`
+                  INSERT INTO giveaways (
+                    guild_id,
+                    channel_id,
+                    message_id,
+                    prize,
+                    winners_count,
+                    required_role_id,
+                    end_at,
+                    participants,
+                    status,
+                    created_at
+                  )
+                  VALUES (?, ?, ?, ?, ?, ?, ?, '[]', 'active', ?)
+                `)
+                .run(
+                  interaction.guild.id,
+                  interaction.channel.id,
+                  'pending',
                   prize,
-                  duration,
                   winners,
-                  required_role_id,
-                  end_at,
-                  participants,
-                  ended,
-                  status,
-                  current_winner_id,
-                  claim_deadline,
-                  claim_round,
-                  expired_winners
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', NULL, NULL, 0, '[]')
-              `).run(
-                interaction.guild.id,
-                interaction.channel.id,
-                'pending',
-                prize,
-                durationInput,
-                winners,
-                role?.id || null,
-                endAt,
-                JSON.stringify([])
-              );
+                  role?.id ||
+                    null,
+                  endAt,
+                  Date.now()
+                );
 
             let giveaway =
-              db.prepare(`
-                SELECT *
-                FROM giveaways
-                WHERE id = ?
-              `).get(
-                result.lastInsertRowid
-              );
+              db
+                .prepare(
+                  'SELECT * FROM giveaways WHERE id=?'
+                )
+                .get(
+                  result.lastInsertRowid
+                );
 
             const message =
               await interaction.channel.send(
-                v2Message(
-                  buildGiveawayPanel(
+                v2(
+                  buildGiveaway(
                     giveaway,
                     config
                   )
@@ -5739,58 +5033,57 @@ client.on(
 
             db.prepare(`
               UPDATE giveaways
-              SET message_id = ?
-              WHERE id = ?
+              SET message_id=?
+              WHERE id=?
             `).run(
               message.id,
               giveaway.id
             );
 
             giveaway =
-              db.prepare(`
-                SELECT *
-                FROM giveaways
-                WHERE id = ?
-              `).get(
-                giveaway.id
-              );
+              db
+                .prepare(
+                  'SELECT * FROM giveaways WHERE id=?'
+                )
+                .get(
+                  giveaway.id
+                );
 
-            await textReply(
+            return replyText(
               interaction,
-              `✅ Giveaway #${giveaway.id} créé. Il se terminera <t:${Math.floor(endAt / 1000)}:R>.`
+              `✅ Giveaway #${giveaway.id} créé. Fin <t:${Math.floor(
+                endAt / 1000
+              )}:R>.`
             );
-
-            return;
           }
-
-          // ------------------------------------------------------------------
-          // END
-          // ------------------------------------------------------------------
 
           if (
             subcommand ===
             'end'
           ) {
             const id =
-              interaction.options.getInteger(
-                'id'
-              );
+              interaction.options
+                .getInteger(
+                  'id'
+                );
 
             const giveaway =
-              db.prepare(`
-                SELECT *
-                FROM giveaways
-                WHERE id = ?
-                  AND guild_id = ?
-              `).get(
-                id,
-                interaction.guild.id
-              );
+              db
+                .prepare(`
+                  SELECT *
+                  FROM giveaways
+                  WHERE id=?
+                    AND guild_id=?
+                `)
+                .get(
+                  id,
+                  interaction.guild.id
+                );
 
             if (
               !giveaway
             ) {
-              return textReply(
+              return replyText(
                 interaction,
                 '❌ Giveaway introuvable.'
               );
@@ -5800,7 +5093,7 @@ client.on(
               giveaway.status !==
               'active'
             ) {
-              return textReply(
+              return replyText(
                 interaction,
                 '❌ Ce giveaway est déjà fermé.'
               );
@@ -5808,86 +5101,80 @@ client.on(
 
             db.prepare(`
               UPDATE giveaways
-              SET end_at = ?
-              WHERE id = ?
+              SET end_at=?
+              WHERE id=?
             `).run(
               Date.now(),
               id
             );
 
-            await startGiveawayClaimRound(
+            await startClaimRound(
               id,
               false
             );
 
-            return textReply(
+            return replyText(
               interaction,
               `✅ Giveaway #${id} terminé.`
             );
           }
-
-          // ------------------------------------------------------------------
-          // FORCE REROLL
-          // ------------------------------------------------------------------
 
           if (
             subcommand ===
             'reroll'
           ) {
             const id =
-              interaction.options.getInteger(
-                'id'
-              );
+              interaction.options
+                .getInteger(
+                  'id'
+                );
 
             const giveaway =
-              db.prepare(`
-                SELECT *
-                FROM giveaways
-                WHERE id = ?
-                  AND guild_id = ?
-              `).get(
-                id,
-                interaction.guild.id
-              );
+              db
+                .prepare(`
+                  SELECT *
+                  FROM giveaways
+                  WHERE id=?
+                    AND guild_id=?
+                `)
+                .get(
+                  id,
+                  interaction.guild.id
+                );
 
             if (
               !giveaway
             ) {
-              return textReply(
+              return replyText(
                 interaction,
                 '❌ Giveaway introuvable.'
               );
             }
 
             if (
-              ![
-                'awaiting_claim',
-                'claimed',
-                'ended'
-              ].includes(
-                giveaway.status
-              )
+              giveaway.status ===
+              'active'
             ) {
-              return textReply(
+              return replyText(
                 interaction,
-                '❌ Ce giveaway ne peut pas encore être reroll.'
+                '❌ Ce giveaway n’est pas encore terminé.'
               );
             }
 
-            await startGiveawayClaimRound(
+            await startClaimRound(
               id,
               true
             );
 
-            return textReply(
+            return replyText(
               interaction,
-              `✅ Reroll du giveaway #${id} lancé.`
+              `✅ Reroll du giveaway #${id} effectué.`
             );
           }
         }
 
         // --------------------------------------------------------------------
-        // /SESSION
+        // SESSION
         // --------------------------------------------------------------------
 
         if (
@@ -5902,64 +5189,66 @@ client.on(
           if (
             !config.systems.sessions
           ) {
-            return textReply(
+            return replyText(
               interaction,
-              '❌ Le système de sessions est désactivé.'
+              '❌ Les sessions sont désactivées.'
             );
           }
 
           const subcommand =
-            interaction.options.getSubcommand();
-
-          // --------------------------------------------------------------
-          // OPEN
-          // --------------------------------------------------------------
+            interaction.options
+              .getSubcommand();
 
           if (
             subcommand ===
             'open'
           ) {
             const serverCode =
-              interaction.options.getString(
-                'server-code'
-              );
+              interaction.options
+                .getString(
+                  'server-code'
+                );
 
             const existing =
-              db.prepare(`
-                SELECT *
-                FROM sessions
-                WHERE guild_id = ?
-                  AND active = 1
-              `).get(
-                interaction.guild.id
-              );
+              db
+                .prepare(`
+                  SELECT *
+                  FROM sessions
+                  WHERE guild_id=?
+                    AND active=1
+                `)
+                .get(
+                  interaction.guild.id
+                );
 
             if (
               existing
             ) {
-              return textReply(
+              return replyText(
                 interaction,
                 '❌ Une session est déjà ouverte.'
               );
             }
 
             const channel =
-              await getTextChannel(
+              await fetchTextChannel(
                 interaction.guild,
                 config.channels.sessions
               ) ||
               interaction.channel;
 
             /*
-             * Components V2 cannot have content in the same message.
-             * Therefore @everyone is sent immediately before the V2 panel.
+             * Components V2 cannot contain normal content in the same message.
+             * Therefore @everyone is sent immediately before the V2 message.
              */
             if (
-              config.sessions.autoPingEveryone
+              config.sessions
+                .pingEveryone
             ) {
               await channel.send({
                 content:
                   '@everyone',
+
                 allowedMentions: {
                   parse: [
                     'everyone'
@@ -5968,11 +5257,11 @@ client.on(
               });
             }
 
-            const sessionContainer =
-              container({
-                title:
+            await channel.send(
+              v2(
+                makeContainer(
                   'Session RP ouverte',
-                description:
+
                   [
                     '## État du serveur',
                     '',
@@ -5980,19 +5269,15 @@ client.on(
                     '',
                     `**Code serveur :** \`${serverCode}\``,
                     '',
-                    'La session RP est officiellement ouverte.',
-                    '',
-                    'Bienvenue en jeu.'
+                    'La session RP est officiellement ouverte.'
                   ].join('\n'),
-                accent:
-                  config.appearance.successColor,
-                footer:
-                  `${config.serverName} • Session ouverte`
-              });
 
-            await channel.send(
-              v2Message(
-                sessionContainer
+                  config.colors.success,
+
+                  [],
+
+                  `${config.serverName} • Session RP`
+                )
               )
             );
 
@@ -6012,41 +5297,39 @@ client.on(
               Date.now()
             );
 
-            return textReply(
+            return replyText(
               interaction,
-              `✅ Session RP ouverte dans ${channel}.`
+              '✅ Session RP ouverte.'
             );
           }
-
-          // --------------------------------------------------------------
-          // SHUTDOWN
-          // --------------------------------------------------------------
 
           if (
             subcommand ===
             'shutdown'
           ) {
             const session =
-              db.prepare(`
-                SELECT *
-                FROM sessions
-                WHERE guild_id = ?
-                  AND active = 1
-              `).get(
-                interaction.guild.id
-              );
+              db
+                .prepare(`
+                  SELECT *
+                  FROM sessions
+                  WHERE guild_id=?
+                    AND active=1
+                `)
+                .get(
+                  interaction.guild.id
+                );
 
             if (
               !session
             ) {
-              return textReply(
+              return replyText(
                 interaction,
                 '❌ Aucune session active.'
               );
             }
 
             const channel =
-              await getTextChannel(
+              await fetchTextChannel(
                 interaction.guild,
                 session.channel_id
               );
@@ -6054,22 +5337,15 @@ client.on(
             if (
               !channel
             ) {
-              db.prepare(`
-                UPDATE sessions
-                SET active = 0
-                WHERE guild_id = ?
-              `).run(
-                interaction.guild.id
-              );
-
-              return textReply(
+              return replyText(
                 interaction,
-                '⚠️ Le salon de la session n’est plus accessible.'
+                '❌ Salon de session introuvable.'
               );
             }
 
             if (
-              config.sessions.clearOnShutdown
+              config.sessions
+                .clearOnShutdown
             ) {
               await clearChannel(
                 channel
@@ -6077,37 +5353,38 @@ client.on(
             }
 
             await channel.send(
-              v2Message(
-                container({
-                  title:
-                    'Session RP fermée',
-                  description:
-                    [
-                      '## État du serveur',
-                      '',
-                      '**Statut :** 🔴 Fermé',
-                      '',
-                      'La session RP est maintenant terminée.',
-                      '',
-                      'Aucun ping n’est envoyé lors de la fermeture.'
-                    ].join('\n'),
-                  accent:
-                    config.appearance.dangerColor,
-                  footer:
-                    `${config.serverName} • Session fermée`
-                })
+              v2(
+                makeContainer(
+                  'Session RP fermée',
+
+                  [
+                    '## État du serveur',
+                    '',
+                    '**Statut :** 🔴 Fermé',
+                    '',
+                    'La session RP est maintenant terminée.',
+                    '',
+                    'Aucun ping n’est envoyé lors de la fermeture.'
+                  ].join('\n'),
+
+                  config.colors.danger,
+
+                  [],
+
+                  `${config.serverName} • Session RP`
+                )
               )
             );
 
             db.prepare(`
               UPDATE sessions
-              SET active = 0
-              WHERE guild_id = ?
+              SET active=0
+              WHERE guild_id=?
             `).run(
               interaction.guild.id
             );
 
-            return textReply(
+            return replyText(
               interaction,
               '✅ Session RP fermée.'
             );
@@ -6116,16 +5393,13 @@ client.on(
       }
 
       // ======================================================================
-      // SELECT MENUS
+      // STRING SELECT MENUS
       // ======================================================================
 
       if (
         interaction.isStringSelectMenu()
       ) {
-        // --------------------------------------------------------------------
-        // APPLICATION
-        // --------------------------------------------------------------------
-
+        // APPLICATIONS
         if (
           interaction.customId ===
           'application_menu'
@@ -6137,54 +5411,25 @@ client.on(
             return;
           }
 
-          const config =
-            getConfig(
-              interaction.guild.id
-            );
-
-          if (
-            !config.systems.applications
-          ) {
-            return textReply(
-              interaction,
-              '❌ Les candidatures Staff sont actuellement fermées.'
-            );
-          }
-
           try {
             await startApplication(
               interaction.user,
               interaction.guild.id
             );
 
-            return textReply(
+            return replyText(
               interaction,
               '✅ Je viens de t’envoyer un DM pour commencer ta candidature.'
             );
-          } catch (
-            error
-          ) {
-            if (
-              error.message ===
-              'APPLICATIONS_CLOSED'
-            ) {
-              return textReply(
-                interaction,
-                '❌ Les candidatures sont actuellement fermées.'
-              );
-            }
-
-            return textReply(
+          } catch {
+            return replyText(
               interaction,
-              '❌ Je ne peux pas t’envoyer de DM. Vérifie que tes messages privés sont ouverts.'
+              '❌ Je ne peux pas t’envoyer de DM. Vérifie tes messages privés.'
             );
           }
         }
 
-        // --------------------------------------------------------------------
-        // TICKET
-        // --------------------------------------------------------------------
-
+        // TICKETS
         if (
           interaction.customId ===
           'ticket_menu'
@@ -6195,263 +5440,126 @@ client.on(
           );
         }
 
-        // --------------------------------------------------------------------
         // CONFIG CATEGORY
-        // --------------------------------------------------------------------
-
         if (
           interaction.customId ===
           'config_category'
         ) {
           if (
-            !configAccessAllowed(
-              interaction
+            !allowedByRole(
+              interaction,
+              getConfig(
+                interaction.guild.id
+              ).roles.config
             )
           ) {
-            return textReply(
+            return replyText(
               interaction,
               '❌ Tu n’as plus accès à la configuration.'
             );
           }
 
-          const config =
-            getConfig(
-              interaction.guild.id
-            );
-
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
-
-            components: [
-              configCategoryView(
-                config,
+          return interaction.update(
+            v2(
+              configCategory(
+                getConfig(
+                  interaction.guild.id
+                ),
                 interaction.values[0]
               )
-            ]
-          });
+            )
+          );
         }
 
-        // --------------------------------------------------------------------
         // CONFIG CHANNEL TARGET
-        // --------------------------------------------------------------------
-
         if (
           interaction.customId ===
-          'config_channel_target'
+          'cfg_channel_target'
         ) {
           const target =
             interaction.values[0];
 
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
+          const picker =
+            new ChannelSelectMenuBuilder()
+              .setCustomId(
+                `cfg_channel_value:${target}`
+              )
+              .setPlaceholder(
+                'Choisir un salon...'
+              )
+              .setMinValues(
+                1
+              )
+              .setMaxValues(
+                1
+              )
+              .setChannelTypes(
+                ChannelType.GuildText,
+                ChannelType.GuildAnnouncement,
+                ChannelType.GuildCategory
+              );
 
-            components: [
-              container({
-                title:
-                  'Choisir un salon',
-                description:
-                  [
-                    `Paramètre : **${target}**`,
-                    '',
-                    'Sélectionne maintenant le salon à utiliser.'
-                  ].join('\n'),
-                accent:
-                  0x5865F2,
-
-                rows: [
+          return interaction.update(
+            v2(
+              makeContainer(
+                'Choisir un salon',
+                `Paramètre : **${target}**\n\nSélectionne le salon à utiliser.`,
+                0x5865F2,
+                [
                   new ActionRowBuilder()
                     .addComponents(
-                      buildChannelPicker(
-                        `config_channel_value:${target}`,
-                        'Choisir un salon...'
-                      )
+                      picker
                     )
-                ],
-
-                footer:
-                  'Le changement est enregistré immédiatement.'
-              })
-            ]
-          });
-        }
-
-        // --------------------------------------------------------------------
-        // CONFIG CHANNEL VALUE
-        // --------------------------------------------------------------------
-
-        if (
-          interaction.customId.startsWith(
-            'config_channel_value:'
-          )
-        ) {
-          const target =
-            interaction.customId
-              .split(':')[1];
-
-          const channelId =
-            interaction.values[0];
-
-          const config =
-            getConfig(
-              interaction.guild.id
-            );
-
-          config.channels[
-            target
-          ] =
-            channelId;
-
-          /*
-           * Ticket category aliases map into the nested ticket config too.
-           */
-          if (
-            target ===
-            'ticketCategorySupport'
-          ) {
-            config.tickets.support.categoryId =
-              channelId;
-          }
-
-          if (
-            target ===
-            'ticketCategoryGiveawayClaim'
-          ) {
-            config.tickets.giveawayClaim.categoryId =
-              channelId;
-          }
-
-          saveConfig(
-            interaction.guild.id,
-            config
-          );
-
-          await interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
-
-            components: [
-              configCategoryView(
-                config,
-                'channels'
+                ]
               )
-            ]
-          });
-
-          await syncAllPanels(
-            interaction.guild
+            )
           );
-
-          return;
         }
 
-        // --------------------------------------------------------------------
         // CONFIG ROLE TARGET
-        // --------------------------------------------------------------------
-
         if (
           interaction.customId ===
-          'config_role_target'
+          'cfg_role_target'
         ) {
           const target =
             interaction.values[0];
 
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
+          const picker =
+            new RoleSelectMenuBuilder()
+              .setCustomId(
+                `cfg_role_value:${target}`
+              )
+              .setPlaceholder(
+                'Choisir un rôle...'
+              )
+              .setMinValues(
+                1
+              )
+              .setMaxValues(
+                1
+              );
 
-            components: [
-              container({
-                title:
-                  'Choisir un rôle',
-                description:
-                  [
-                    `Paramètre : **${target}**`,
-                    '',
-                    'Sélectionne le rôle à utiliser.'
-                  ].join('\n'),
-
-                accent:
-                  0x5865F2,
-
-                rows: [
+          return interaction.update(
+            v2(
+              makeContainer(
+                'Choisir un rôle',
+                `Paramètre : **${target}**\n\nSélectionne le rôle à utiliser.`,
+                0x5865F2,
+                [
                   new ActionRowBuilder()
                     .addComponents(
-                      new RoleSelectMenuBuilder()
-                        .setCustomId(
-                          `config_role_value:${target}`
-                        )
-                        .setPlaceholder(
-                          'Choisir un rôle...'
-                        )
-                        .setMinValues(
-                          1
-                        )
-                        .setMaxValues(
-                          1
-                        )
+                      picker
                     )
-                ],
-
-                footer:
-                  'Le changement est enregistré immédiatement.'
-              })
-            ]
-          });
-        }
-
-        // --------------------------------------------------------------------
-        // CONFIG ROLE VALUE
-        // --------------------------------------------------------------------
-
-        if (
-          interaction.customId.startsWith(
-            'config_role_value:'
-          )
-        ) {
-          const target =
-            interaction.customId
-              .split(':')[1];
-
-          const roleId =
-            interaction.values[0];
-
-          const config =
-            getConfig(
-              interaction.guild.id
-            );
-
-          config.roles[
-            target
-          ] =
-            roleId;
-
-          saveConfig(
-            interaction.guild.id,
-            config
-          );
-
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
-
-            components: [
-              configCategoryView(
-                config,
-                'roles'
+                ]
               )
-            ]
-          });
+            )
+          );
         }
 
-        // --------------------------------------------------------------------
-        // CONFIG SECURITY TARGET
-        // --------------------------------------------------------------------
-
+        // CONFIG SECURITY
         if (
           interaction.customId ===
-          'config_security_target'
+          'cfg_security_target'
         ) {
           const target =
             interaction.values[0];
@@ -6460,91 +5568,108 @@ client.on(
             target ===
             'bypass'
           ) {
-            return interaction.update({
-              flags:
-                MessageFlags.IsComponentsV2,
+            const menu =
+              new StringSelectMenuBuilder()
+                .setCustomId(
+                  'cfg_bypass_system'
+                )
+                .setPlaceholder(
+                  'Choisir le système...'
+                )
+                .addOptions(
+                  new StringSelectMenuOptionBuilder()
+                    .setLabel(
+                      'Anti-raid'
+                    )
+                    .setValue(
+                      'antiRaid'
+                    ),
 
-              components: [
-                container({
-                  title:
-                    'Sécurité • Rôle bypass',
-                  description:
-                    [
-                      'Sélectionne les rôles pouvant bypass un système.',
-                      '',
-                      'Le système concerné est demandé juste après.'
-                    ].join('\n'),
+                  new StringSelectMenuOptionBuilder()
+                    .setLabel(
+                      'Anti-spam'
+                    )
+                    .setValue(
+                      'antiSpam'
+                    ),
 
-                  accent:
-                    0xED4245,
+                  new StringSelectMenuOptionBuilder()
+                    .setLabel(
+                      'Mass mention'
+                    )
+                    .setValue(
+                      'antiMassMention'
+                    ),
 
-                  rows: [
+                  new StringSelectMenuOptionBuilder()
+                    .setLabel(
+                      'Suppression massive'
+                    )
+                    .setValue(
+                      'antiMassDelete'
+                    ),
+
+                  new StringSelectMenuOptionBuilder()
+                    .setLabel(
+                      'Mots interdits'
+                    )
+                    .setValue(
+                      'badWords'
+                    )
+                );
+
+            return interaction.update(
+              v2(
+                makeContainer(
+                  'Rôles bypass',
+
+                  'Choisis d’abord le système auquel les rôles pourront être exemptés.',
+
+                  config.colors.danger,
+
+                  [
                     new ActionRowBuilder()
                       .addComponents(
-                        new StringSelectMenuBuilder()
-                          .setCustomId(
-                            'config_bypass_system'
-                          )
-                          .setPlaceholder(
-                            'Choisir le système...'
-                          )
-                          .addOptions(
-                            [
-                              ['Mots interdits', 'badWords'],
-                              ['Anti-spam', 'antiSpam'],
-                              ['Anti-raid', 'antiRaid'],
-                              ['Mass mention', 'antiMassMention'],
-                              ['Suppression massive', 'antiMassDelete']
-                            ].map(
-                              ([label, value]) =>
-                                new StringSelectMenuOptionBuilder()
-                                  .setLabel(label)
-                                  .setValue(value)
-                            )
-                          )
+                        menu
                       )
-                  ],
-
-                  footer:
-                    'Les rôles bypass sont configurables individuellement.'
-                })
-              ]
-            });
-          }
-
-          const map = {
-            antiRaid:
-              'systems.antiRaid',
-            antiSpam:
-              'systems.antiSpam',
-            antiMassMention:
-              'systems.antiMassMention',
-            antiMassDelete:
-              'systems.antiMassDelete',
-            badWords:
-              'systems.badWords'
-          };
-
-          const path =
-            map[target];
-
-          const current =
-            getNested(
-              getConfig(
-                interaction.guild.id
-              ),
-              path
+                  ]
+                )
+              )
             );
+          }
 
           const config =
             getConfig(
               interaction.guild.id
             );
 
+          const paths = {
+            antiRaid:
+              'systems.antiRaid',
+
+            antiSpam:
+              'systems.antiSpam',
+
+            antiMassMention:
+              'systems.antiMassMention',
+
+            antiMassDelete:
+              'systems.antiMassDelete',
+
+            badWords:
+              'systems.badWords'
+          };
+
+          const path =
+            paths[target];
+
           setNested(
             config,
             path,
-            !current
+            !getNested(
+              config,
+              path
+            )
           );
 
           saveConfig(
@@ -6552,73 +5677,65 @@ client.on(
             config
           );
 
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
-
-            components: [
-              configCategoryView(
+          return interaction.update(
+            v2(
+              configCategory(
                 config,
                 'security'
               )
-            ]
-          });
+            )
+          );
         }
 
-        // --------------------------------------------------------------------
         // CONFIG BYPASS SYSTEM
-        // --------------------------------------------------------------------
-
         if (
           interaction.customId ===
-          'config_bypass_system'
+          'cfg_bypass_system'
         ) {
           const system =
             interaction.values[0];
 
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
+          const picker =
+            new RoleSelectMenuBuilder()
+              .setCustomId(
+                `cfg_bypass_roles:${system}`
+              )
+              .setPlaceholder(
+                'Choisir les rôles bypass...'
+              )
+              .setMinValues(
+                1
+              )
+              .setMaxValues(
+                10
+              );
 
-            components: [
-              container({
-                title:
-                  `Bypass • ${system}`,
+          return interaction.update(
+            v2(
+              makeContainer(
+                'Choisir les rôles bypass',
 
-                description:
-                  [
-                    `Choisis les rôles qui peuvent bypass **${system}**.`,
-                    '',
-                    'Tu peux sélectionner plusieurs rôles.'
-                  ].join('\n'),
+                `Système : **${system}**\n\nSélectionne les rôles qui seront exemptés.`,
 
-                accent:
-                  0xED4245,
+                configCategoryColor(
+                  interaction.guild.id
+                ),
 
-                rows: [
+                [
                   new ActionRowBuilder()
                     .addComponents(
-                      buildRolePicker(
-                        `config_bypass_roles:${system}`,
-                        'Sélectionner les rôles bypass...'
-                      )
+                      picker
                     )
-                ],
-
-                footer:
-                  'Les rôles sélectionnés remplacent l’ancienne liste.'
-              })
-            ]
-          });
+                ]
+              )
+            )
+          );
         }
 
-        // --------------------------------------------------------------------
-        // CONFIG APPLICATION TARGET
-        // --------------------------------------------------------------------
-
+        // CONFIG APPLICATIONS
         if (
           interaction.customId ===
-          'config_application_target'
+          'cfg_app_target'
         ) {
           const target =
             interaction.values[0];
@@ -6632,25 +5749,24 @@ client.on(
             target ===
             'toggle'
           ) {
-            config.systems.applications =
-              !config.systems.applications;
+            config.systems
+              .applications =
+              !config.systems
+                .applications;
 
             saveConfig(
               interaction.guild.id,
               config
             );
 
-            await interaction.update({
-              flags:
-                MessageFlags.IsComponentsV2,
-
-              components: [
-                configCategoryView(
+            await interaction.update(
+              v2(
+                configCategory(
                   config,
                   'applications'
                 )
-              ]
-            });
+              )
+            );
 
             await syncAllPanels(
               interaction.guild
@@ -6663,28 +5779,30 @@ client.on(
             target ===
             'questions'
           ) {
-            return interaction.update({
-              flags:
-                MessageFlags.IsComponentsV2,
+            return interaction.update(
+              v2(
+                makeContainer(
+                  'Questions de candidature',
 
-              components: [
-                container({
-                  title:
-                    'Questions de candidature',
-                  description:
-                    config.applications.questions
-                      .map(
-                        (question, index) =>
-                          `**${index + 1}.** ${question}`
-                      )
-                      .join('\n\n') ||
+                  config.applications.questions
+                    .map(
+                      (
+                        question,
+                        index
+                      ) =>
+                        `**${
+                          index + 1
+                        }.** ${question}`
+                    )
+                    .join(
+                      '\n\n'
+                    ) ||
                     'Aucune question.',
 
-                  accent:
-                    config.appearance.accentColor
-                })
-              ]
-            });
+                  config.colors.primary
+                )
+              )
+            );
           }
 
           if (
@@ -6694,7 +5812,7 @@ client.on(
             const modal =
               new ModalBuilder()
                 .setCustomId(
-                  'config_add_question'
+                  'cfg_add_question'
                 )
                 .setTitle(
                   'Ajouter une question'
@@ -6737,7 +5855,7 @@ client.on(
             const modal =
               new ModalBuilder()
                 .setCustomId(
-                  'config_remove_question'
+                  'cfg_remove_question'
                 )
                 .setTitle(
                   'Supprimer une question'
@@ -6756,9 +5874,6 @@ client.on(
                 )
                 .setRequired(
                   true
-                )
-                .setPlaceholder(
-                  'Exemple : 3'
                 );
 
             modal.addComponents(
@@ -6777,265 +5892,46 @@ client.on(
             target ===
             'staffRole'
           ) {
-            const role =
-              await getRole(
-                interaction.guild,
-                config.roles.staff
-              );
+            const picker =
+              new RoleSelectMenuBuilder()
+                .setCustomId(
+                  'cfg_staff_role'
+                )
+                .setPlaceholder(
+                  'Choisir le rôle Staff...'
+                )
+                .setMinValues(
+                  1
+                )
+                .setMaxValues(
+                  1
+                );
 
-            return interaction.update({
-              flags:
-                MessageFlags.IsComponentsV2,
+            return interaction.update(
+              v2(
+                makeContainer(
+                  'Rôle Staff après acceptation',
 
-              components: [
-                container({
-                  title:
-                    'Rôle Staff après acceptation',
-                  description:
-                    [
-                      `Rôle actuel : ${
-                        role
-                          ? `<@&${role.id}>`
-                          : 'Aucun'
-                      }`,
-                      '',
-                      'Choisis le rôle qui sera automatiquement attribué lorsqu’une candidature est acceptée.'
-                    ].join('\n'),
+                  'Sélectionne le rôle qui sera automatiquement attribué lorsqu’une candidature est acceptée.',
 
-                  accent:
-                    config.appearance.accentColor,
+                  config.colors.primary,
 
-                  rows: [
+                  [
                     new ActionRowBuilder()
                       .addComponents(
-                        new RoleSelectMenuBuilder()
-                          .setCustomId(
-                            'config_staff_role'
-                          )
-                          .setPlaceholder(
-                            'Choisir le rôle Staff...'
-                          )
-                          .setMinValues(
-                            1
-                          )
-                          .setMaxValues(
-                            1
-                          )
-                      ]
+                        picker
+                      )
                   ]
-                })
-              ]
-            });
+                )
+              )
+            );
           }
         }
 
-        // --------------------------------------------------------------------
-// CONFIG TICKET TARGET
-// --------------------------------------------------------------------
-
-if (
-  interaction.customId ===
-  'config_ticket_target'
-) {
-  const target =
-    interaction.values[0];
-
-  const names = {
-    support_view:
-      'Support • Voir',
-
-    support_ping:
-      'Support • Ping',
-
-    claim_view:
-      'Giveaway • Voir',
-
-    claim_ping:
-      'Giveaway • Ping'
-  };
-
-  // --------------------------------------------------------------
-  // DELETE AFTER CLOSE
-  // --------------------------------------------------------------
-
-  if (
-    target === 'delete'
-  ) {
-    const config =
-      getConfig(
-        interaction.guild.id
-      );
-
-    config.tickets.deleteAfterClose =
-      !config.tickets.deleteAfterClose;
-
-    saveConfig(
-      interaction.guild.id,
-      config
-    );
-
-    return interaction.update({
-      flags:
-        MessageFlags.IsComponentsV2,
-
-      components: [
-        configCategoryView(
-          config,
-          'tickets'
-        )
-      ]
-    });
-  }
-
-  // --------------------------------------------------------------
-  // CATEGORY
-  // --------------------------------------------------------------
-
-  if (
-    target === 'support_category' ||
-    target === 'claim_category'
-  ) {
-    const config =
-      getConfig(
-        interaction.guild.id
-      );
-
-    const realTarget =
-      target === 'support_category'
-        ? 'ticketCategorySupport'
-        : 'ticketCategoryGiveawayClaim';
-
-    const picker =
-      new ChannelSelectMenuBuilder()
-        .setCustomId(
-          `config_ticket_category_value:${realTarget}`
-        )
-        .setPlaceholder(
-          'Choisir une catégorie...'
-        )
-        .setMinValues(1)
-        .setMaxValues(1)
-        .setChannelTypes(
-          ChannelType.GuildCategory
-        );
-
-    return interaction.update({
-      flags:
-        MessageFlags.IsComponentsV2,
-
-      components: [
-        container({
-          title:
-            'Catégorie de tickets',
-
-          description:
-            [
-              `## ${target === 'support_category'
-                ? 'Support'
-                : 'Giveaway • Réclamation'}`,
-              '',
-              'Sélectionne la catégorie Discord dans laquelle les tickets de ce type seront créés.'
-            ].join('\n'),
-
-          accent:
-            config.appearance.accentColor,
-
-          rows: [
-            new ActionRowBuilder()
-              .addComponents(
-                picker
-              )
-          ],
-
-          footer:
-            `${config.serverName} • Configuration des tickets`
-        })
-      ]
-    });
-  }
-
-  // --------------------------------------------------------------
-  // ROLE VIEW / PING
-  // --------------------------------------------------------------
-
-  const config =
-    getConfig(
-      interaction.guild.id
-    );
-
-  const isViewSetting =
-    target.endsWith('_view');
-
-  const type =
-    target.startsWith('support')
-      ? 'support'
-      : 'giveawayClaim';
-
-  const typeLabel =
-    type === 'support'
-      ? 'Support'
-      : 'Giveaway • Réclamation';
-
-  const rolePicker =
-    buildRolePicker(
-      `config_ticket_roles:${target}`,
-      isViewSetting
-        ? 'Choisir les rôles autorisés à voir...'
-        : 'Choisir les rôles qui seront ping...'
-    );
-
-  return interaction.update({
-    flags:
-      MessageFlags.IsComponentsV2,
-
-    components: [
-      container({
-        title:
-          `Tickets • ${names[target] || target}`,
-
-        description:
-          [
-            `## ${typeLabel}`,
-            '',
-            isViewSetting
-              ? 'Les rôles sélectionnés pourront voir les tickets de ce type.'
-              : 'Les rôles sélectionnés seront ping lorsqu’un ticket de ce type sera créé.',
-            '',
-            `**Configuration actuelle :** ${
-              isViewSetting
-                ? formatRoleList(
-                    config.tickets[type].viewRoleIds
-                  )
-                : formatRoleList(
-                    config.tickets[type].pingRoleIds
-                  )
-            }`
-          ].join('\n'),
-
-        accent:
-          config.appearance.accentColor,
-
-        rows: [
-          new ActionRowBuilder()
-            .addComponents(
-              rolePicker
-            )
-        ],
-
-        footer:
-          `${config.serverName} • Configuration des tickets`
-      })
-    ]
-  });
-}
-
-        // --------------------------------------------------------------------
-        // CONFIG GIVEAWAY TARGET
-        // --------------------------------------------------------------------
-
+        // CONFIG TICKETS
         if (
           interaction.customId ===
-          'config_giveaway_target'
+          'cfg_ticket_target'
         ) {
           const target =
             interaction.values[0];
@@ -7047,81 +5943,145 @@ if (
 
           if (
             target ===
-            'summary'
+            'delete'
           ) {
-            return interaction.update({
-              flags:
-                MessageFlags.IsComponentsV2,
+            config.tickets
+              .deleteAfterClose =
+              !config.tickets
+                .deleteAfterClose;
 
-              components: [
-                configCategoryView(
+            saveConfig(
+              interaction.guild.id,
+              config
+            );
+
+            return interaction.update(
+              v2(
+                configCategory(
                   config,
-                  'giveaways'
+                  'tickets'
                 )
-              ]
-            });
+              )
+            );
           }
 
           if (
             target ===
-            'role'
+              'support_category' ||
+            target ===
+              'claim_category'
           ) {
-            return interaction.update({
-              flags:
-                MessageFlags.IsComponentsV2,
+            const key =
+              target ===
+              'support_category'
+                ? 'ticketCategorySupport'
+                : 'ticketCategoryClaim';
 
-              components: [
-                container({
-                  title:
-                    'Rôle Giveaway',
-                  description:
-                    [
-                      `Rôle actuel : ${
-                        config.roles.giveaways
-                          ? `<@&${config.roles.giveaways}>`
-                          : 'Aucun'
-                      }`,
-                      '',
-                      'Sélectionne le rôle pouvant gérer les giveaways lorsque le mode test sera désactivé.'
-                    ].join('\n'),
+            const picker =
+              new ChannelSelectMenuBuilder()
+                .setCustomId(
+                  `cfg_ticket_category:${key}`
+                )
+                .setPlaceholder(
+                  'Choisir une catégorie...'
+                )
+                .setMinValues(
+                  1
+                )
+                .setMaxValues(
+                  1
+                )
+                .setChannelTypes(
+                  ChannelType.GuildCategory
+                );
 
-                  accent:
-                    config.appearance.warningColor,
+            return interaction.update(
+              v2(
+                makeContainer(
+                  'Catégorie de tickets',
 
-                  rows: [
+                  `Paramètre : **${target}**`,
+
+                  config.colors.primary,
+
+                  [
                     new ActionRowBuilder()
                       .addComponents(
-                        new RoleSelectMenuBuilder()
-                          .setCustomId(
-                            'config_giveaway_role'
-                          )
-                          .setPlaceholder(
-                            'Choisir le rôle...'
-                          )
-                          .setMinValues(
-                            1
-                          )
-                          .setMaxValues(
-                            1
-                          )
-                      ]
+                        picker
+                      )
                   ]
-                })
-              ]
-            });
+                )
+              )
+            );
           }
+
+          const picker =
+            new RoleSelectMenuBuilder()
+              .setCustomId(
+                `cfg_ticket_roles:${target}`
+              )
+              .setPlaceholder(
+                target.endsWith(
+                  '_view'
+                )
+                  ? 'Rôles qui peuvent voir...'
+                  : 'Rôles qui recevront le ping...'
+              )
+              .setMinValues(
+                1
+              )
+              .setMaxValues(
+                10
+              );
+
+          return interaction.update(
+            v2(
+              makeContainer(
+                'Rôles des tickets',
+
+                target.includes(
+                  'view'
+                )
+                  ? 'Les rôles sélectionnés pourront voir ce type de ticket.'
+                  : 'Les rôles sélectionnés seront ping lors de la création.',
+
+                config.colors.primary,
+
+                [
+                  new ActionRowBuilder()
+                    .addComponents(
+                      picker
+                    )
+                ]
+              )
+            )
+          );
+        }
+
+        // CONFIG GIVEAWAYS
+        if (
+          interaction.customId ===
+          'cfg_gw_target'
+        ) {
+          const target =
+            interaction.values[0];
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
 
           if (
             target ===
-            'claim_hours'
+            'hours'
           ) {
             const modal =
               new ModalBuilder()
                 .setCustomId(
-                  'config_claim_hours'
+                  'cfg_claim_hours'
                 )
                 .setTitle(
-                  'Durée de réclamation'
+                  'Délai de réclamation'
                 );
 
             const input =
@@ -7153,98 +6113,100 @@ if (
               modal
             );
           }
+
+          const picker =
+            new RoleSelectMenuBuilder()
+              .setCustomId(
+                'cfg_giveaway_role'
+              )
+              .setPlaceholder(
+                'Choisir le rôle...'
+              )
+              .setMinValues(
+                1
+              )
+              .setMaxValues(
+                1
+              );
+
+          return interaction.update(
+            v2(
+              makeContainer(
+                'Rôle Giveaways',
+
+                'Sélectionne le rôle qui pourra gérer les giveaways lorsque le mode test sera désactivé.',
+
+                config.colors.warning,
+
+                [
+                  new ActionRowBuilder()
+                    .addComponents(
+                      picker
+                    )
+                ]
+              )
+            )
+          );
         }
 
-        // --------------------------------------------------------------------
-        // CONFIG SESSIONS TARGET
-        // --------------------------------------------------------------------
-
+        // CONFIG SESSIONS
         if (
           interaction.customId ===
-          'config_session_target'
+          'cfg_session_target'
         ) {
-          const target =
-            interaction.values[0];
-
           const config =
             getConfig(
               interaction.guild.id
             );
 
           if (
-            target ===
+            interaction.values[0] ===
             'ping'
           ) {
-            config.sessions.autoPingEveryone =
-              !config.sessions.autoPingEveryone;
-
-            saveConfig(
-              interaction.guild.id,
-              config
-            );
-
-            return interaction.update({
-              flags:
-                MessageFlags.IsComponentsV2,
-
-              components: [
-                configCategoryView(
-                  config,
-                  'sessions'
-                )
-              ]
-            });
+            config.sessions
+              .pingEveryone =
+              !config.sessions
+                .pingEveryone;
+          } else {
+            config.sessions
+              .clearOnShutdown =
+              !config.sessions
+                .clearOnShutdown;
           }
 
-          if (
-            target ===
-            'clear'
-          ) {
-            config.sessions.clearOnShutdown =
-              !config.sessions.clearOnShutdown;
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
 
-            saveConfig(
-              interaction.guild.id,
-              config
-            );
-
-            return interaction.update({
-              flags:
-                MessageFlags.IsComponentsV2,
-
-              components: [
-                configCategoryView(
-                  config,
-                  'sessions'
-                )
-              ]
-            });
-          }
-
-          return;
+          return interaction.update(
+            v2(
+              configCategory(
+                config,
+                'sessions'
+              )
+            )
+          );
         }
 
-        // --------------------------------------------------------------------
-        // CONFIG SYSTEM TARGET
-        // --------------------------------------------------------------------
-
+        // CONFIG SYSTEMS
         if (
           interaction.customId ===
-          'config_system_target'
+          'cfg_system_target'
         ) {
-          const target =
-            interaction.values[0];
-
           const config =
             getConfig(
               interaction.guild.id
             );
 
+          const system =
+            interaction.values[0];
+
           config.systems[
-            target
+            system
           ] =
             !config.systems[
-              target
+              system
             ];
 
           saveConfig(
@@ -7252,17 +6214,14 @@ if (
             config
           );
 
-          await interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
-
-            components: [
-              configCategoryView(
+          await interaction.update(
+            v2(
+              configCategory(
                 config,
                 'systems'
               )
-            ]
-          });
+            )
+          );
 
           await syncAllPanels(
             interaction.guild
@@ -7281,64 +6240,78 @@ if (
       ) {
         if (
           interaction.customId.startsWith(
-            'config_ticket_category_value:'
+            'cfg_channel_value:'
           )
         ) {
-          const target =
-            interaction.customId
-              .split(':')[1];
-
-          const value =
-            interaction.values[0];
+          const key =
+            interaction.customId.split(
+              ':'
+            )[1];
 
           const config =
             getConfig(
               interaction.guild.id
             );
 
-          if (
-            target ===
-            'ticketCategorySupport'
-          ) {
-            config.channels
-              .ticketCategorySupport =
-              value;
-
-            config.tickets.support
-              .categoryId =
-              value;
-          }
-
-          if (
-            target ===
-            'ticketCategoryGiveawayClaim'
-          ) {
-            config.channels
-              .ticketCategoryGiveawayClaim =
-              value;
-
-            config.tickets
-              .giveawayClaim
-              .categoryId =
-              value;
-          }
+          config.channels[
+            key
+          ] =
+            interaction.values[0];
 
           saveConfig(
             interaction.guild.id,
             config
           );
 
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
+          await interaction.update(
+            v2(
+              configCategory(
+                config,
+                'channels'
+              )
+            )
+          );
 
-            components: [
-              configCategoryView(
+          await syncAllPanels(
+            interaction.guild
+          );
+
+          return;
+        }
+
+        if (
+          interaction.customId.startsWith(
+            'cfg_ticket_category:'
+          )
+        ) {
+          const key =
+            interaction.customId.split(
+              ':'
+            )[1];
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          config.channels[
+            key
+          ] =
+            interaction.values[0];
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          return interaction.update(
+            v2(
+              configCategory(
                 config,
                 'tickets'
               )
-            ]
-          });
+            )
+          );
         }
       }
 
@@ -7349,18 +6322,50 @@ if (
       if (
         interaction.isRoleSelectMenu()
       ) {
-        // --------------------------------------------------------------------
-        // SECURITY BYPASS
-        // --------------------------------------------------------------------
+        if (
+          interaction.customId.startsWith(
+            'cfg_role_value:'
+          )
+        ) {
+          const key =
+            interaction.customId.split(
+              ':'
+            )[1];
+
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          config.roles[
+            key
+          ] =
+            interaction.values[0];
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          return interaction.update(
+            v2(
+              configCategory(
+                config,
+                'roles'
+              )
+            )
+          );
+        }
 
         if (
           interaction.customId.startsWith(
-            'config_bypass_roles:'
+            'cfg_bypass_roles:'
           )
         ) {
           const system =
-            interaction.customId
-              .split(':')[1];
+            interaction.customId.split(
+              ':'
+            )[1];
 
           const config =
             getConfig(
@@ -7370,82 +6375,67 @@ if (
           config.bypassRoles[
             system
           ] =
-            [...interaction.values];
+            [
+              ...interaction.values
+            ];
 
           saveConfig(
             interaction.guild.id,
             config
           );
 
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
-
-            components: [
-              configCategoryView(
+          return interaction.update(
+            v2(
+              configCategory(
                 config,
                 'security'
               )
-            ]
-          });
+            )
+          );
         }
-
-        // --------------------------------------------------------------------
-        // TICKET ROLES
-        // --------------------------------------------------------------------
 
         if (
           interaction.customId.startsWith(
-            'config_ticket_roles:'
+            'cfg_ticket_roles:'
           )
         ) {
           const target =
-            interaction.customId
-              .split(':')[1];
+            interaction.customId.split(
+              ':'
+            )[1];
 
           const config =
             getConfig(
               interaction.guild.id
             );
 
-          if (
-            target ===
-            'support_view'
-          ) {
-            config.tickets
-              .support
-              .viewRoleIds =
-              [...interaction.values];
-          }
+          const claim =
+            target.startsWith(
+              'claim'
+            );
+
+          const view =
+            target.endsWith(
+              '_view'
+            );
+
+          const section =
+            claim
+              ? config.tickets.claim
+              : config.tickets.support;
 
           if (
-            target ===
-            'support_ping'
+            view
           ) {
-            config.tickets
-              .support
-              .pingRoleIds =
-              [...interaction.values];
-          }
-
-          if (
-            target ===
-            'claim_view'
-          ) {
-            config.tickets
-              .giveawayClaim
-              .viewRoleIds =
-              [...interaction.values];
-          }
-
-          if (
-            target ===
-            'claim_ping'
-          ) {
-            config.tickets
-              .giveawayClaim
-              .pingRoleIds =
-              [...interaction.values];
+            section.viewRoleIds =
+              [
+                ...interaction.values
+              ];
+          } else {
+            section.pingRoleIds =
+              [
+                ...interaction.values
+              ];
           }
 
           saveConfig(
@@ -7453,26 +6443,19 @@ if (
             config
           );
 
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
-
-            components: [
-              configCategoryView(
+          return interaction.update(
+            v2(
+              configCategory(
                 config,
                 'tickets'
               )
-            ]
-          });
+            )
+          );
         }
-
-        // --------------------------------------------------------------------
-        // STAFF ROLE
-        // --------------------------------------------------------------------
 
         if (
           interaction.customId ===
-          'config_staff_role'
+          'cfg_staff_role'
         ) {
           const config =
             getConfig(
@@ -7487,26 +6470,19 @@ if (
             config
           );
 
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
-
-            components: [
-              configCategoryView(
+          return interaction.update(
+            v2(
+              configCategory(
                 config,
                 'applications'
               )
-            ]
-          });
+            )
+          );
         }
-
-        // --------------------------------------------------------------------
-        // GIVEAWAY ROLE
-        // --------------------------------------------------------------------
 
         if (
           interaction.customId ===
-          'config_giveaway_role'
+          'cfg_giveaway_role'
         ) {
           const config =
             getConfig(
@@ -7521,17 +6497,21 @@ if (
             config
           );
 
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
-
-            components: [
-              configCategoryView(
+          return interaction.update(
+            v2(
+              configCategory(
                 config,
                 'giveaways'
               )
-            ]
-          });
+            )
+          );
+        }
+
+        if (
+          interaction.customId ===
+          'rules_accept'
+        ) {
+          return;
         }
       }
 
@@ -7548,65 +6528,42 @@ if (
 
         if (
           interaction.customId ===
-          'config_refresh'
-        ) {
-          if (
-            !configAccessAllowed(
-              interaction
-            )
-          ) {
-            return textReply(
-              interaction,
-              '❌ Tu n’as plus accès à la configuration.'
-            );
-          }
-
-          const config =
-            getConfig(
-              interaction.guild.id
-            );
-
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
-
-            components: [
-              buildConfigHome(
-                config
-              )
-            ]
-          });
-        }
-
-        if (
-          interaction.customId ===
           'config_back'
         ) {
-          const config =
-            getConfig(
-              interaction.guild.id
-            );
-
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
-
-            components: [
-              buildConfigHome(
-                config
+          return interaction.update(
+            v2(
+              configHome(
+                getConfig(
+                  interaction.guild.id
+                )
               )
-            ]
-          });
+            )
+          );
         }
 
         if (
           interaction.customId ===
-          'config_change_color'
+          'config_refresh'
+        ) {
+          return interaction.update(
+            v2(
+              configHome(
+                getConfig(
+                  interaction.guild.id
+                )
+              )
+            )
+          );
+        }
+
+        if (
+          interaction.customId ===
+          'cfg_color'
         ) {
           const modal =
             new ModalBuilder()
               .setCustomId(
-                'config_color_modal'
+                'cfg_color_modal'
               )
               .setTitle(
                 'Changer la couleur'
@@ -7643,7 +6600,7 @@ if (
         }
 
         // --------------------------------------------------------------------
-        // RULE ACCEPT
+        // RULES
         // --------------------------------------------------------------------
 
         if (
@@ -7655,46 +6612,37 @@ if (
               interaction.guild.id
             );
 
-          if (
-            !config.roles.verified
-          ) {
-            return textReply(
-              interaction,
-              '❌ Aucun rôle de validation n’est configuré.'
-            );
-          }
-
           const role =
-            await getRole(
-              interaction.guild,
-              config.roles.verified
-            );
+            await interaction.guild.roles
+              .fetch(
+                config.roles.verified
+              )
+              .catch(
+                () => null
+              );
 
           if (
             !role
           ) {
-            return textReply(
+            return replyText(
               interaction,
-              '❌ Le rôle configuré est introuvable.'
+              '❌ Le rôle de validation est introuvable.'
             );
           }
 
-          try {
-            await interaction.member.roles.add(
+          await interaction.member.roles
+            .add(
               role,
               'Acceptation du règlement'
+            )
+            .catch(
+              () => {}
             );
 
-            return textReply(
-              interaction,
-              `✅ Règlement accepté. Tu as reçu ${role}.`
-            );
-          } catch {
-            return textReply(
-              interaction,
-              '❌ Je ne peux pas attribuer ce rôle. Vérifie la position du rôle du bot.'
-            );
-          }
+          return replyText(
+            interaction,
+            `✅ Règlement accepté. Tu as reçu ${role}.`
+          );
         }
 
         // --------------------------------------------------------------------
@@ -7708,62 +6656,51 @@ if (
         ) {
           const id =
             Number(
-              interaction.customId
-                .split(':')[1]
+              interaction.customId.split(
+                ':'
+              )[1]
             );
 
           const application =
-            db.prepare(`
-              SELECT *
-              FROM applications
-              WHERE id = ?
-                AND user_id = ?
-                AND status = 'collecting'
-            `).get(
-              id,
-              interaction.user.id
-            );
+            db
+              .prepare(`
+                SELECT *
+                FROM applications
+                WHERE id=?
+                  AND user_id=?
+                  AND status='collecting'
+              `)
+              .get(
+                id,
+                interaction.user.id
+              );
 
           if (
             !application
           ) {
-            return textReply(
+            return replyText(
               interaction,
               '❌ Cette candidature n’est plus disponible.'
             );
           }
 
-          await interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2,
-
-            components: [
-              container({
-                title:
-                  'Candidature démarrée',
-                description:
-                  [
-                    'Parfait.',
-                    '',
-                    'Nous commençons maintenant.',
-                    '',
-                    'Réponds à chaque question directement dans ce DM.'
-                  ].join('\n'),
-                accent:
-                  0x57F287
-              })
-            ]
-          });
-
-          await askApplicationQuestion(
-            application
+          await interaction.update(
+            v2(
+              makeContainer(
+                'Candidature démarrée',
+                'Réponds à chaque question directement dans ce DM.',
+                0x57F287
+              )
+            )
           );
 
-          return;
+          return askApplication(
+            application
+          );
         }
 
         // --------------------------------------------------------------------
-        // APPLICATION ACCEPT / REFUSE
+        // APPLICATION DECISION
         // --------------------------------------------------------------------
 
         if (
@@ -7781,14 +6718,19 @@ if (
 
           const applicationId =
             Number(
-              interaction.customId
-                .split(':')[1]
+              interaction.customId.split(
+                ':'
+              )[1]
             );
 
           const modal =
             new ModalBuilder()
               .setCustomId(
-                `application_decision:${accepted ? 'accept' : 'refuse'}:${applicationId}`
+                `application_decision:${
+                  accepted
+                    ? 'accept'
+                    : 'refuse'
+                }:${applicationId}`
               )
               .setTitle(
                 accepted
@@ -7835,27 +6777,28 @@ if (
             'giveaway_join:'
           )
         ) {
-          const giveawayId =
+          const id =
             Number(
-              interaction.customId
-                .split(':')[1]
+              interaction.customId.split(
+                ':'
+              )[1]
             );
 
           const giveaway =
-            db.prepare(`
-              SELECT *
-              FROM giveaways
-              WHERE id = ?
-            `).get(
-              giveawayId
-            );
+            db
+              .prepare(
+                'SELECT * FROM giveaways WHERE id=?'
+              )
+              .get(
+                id
+              );
 
           if (
             !giveaway ||
             giveaway.status !==
               'active'
           ) {
-            return textReply(
+            return replyText(
               interaction,
               '❌ Ce giveaway est fermé.'
             );
@@ -7865,12 +6808,12 @@ if (
             giveaway.end_at <=
             Date.now()
           ) {
-            await startGiveawayClaimRound(
-              giveaway.id,
+            await startClaimRound(
+              id,
               false
             );
 
-            return textReply(
+            return replyText(
               interaction,
               '❌ Ce giveaway vient de se terminer.'
             );
@@ -7882,14 +6825,14 @@ if (
               giveaway.required_role_id
             )
           ) {
-            return textReply(
+            return replyText(
               interaction,
               `❌ Tu dois avoir <@&${giveaway.required_role_id}> pour participer.`
             );
           }
 
           const participants =
-            getGiveawayParticipants(
+            giveawayParticipants(
               giveaway
             );
 
@@ -7898,9 +6841,9 @@ if (
               interaction.user.id
             )
           ) {
-            return textReply(
+            return replyText(
               interaction,
-              '⚠️ Tu participes déjà à ce giveaway. Utilise **Quitter** si tu veux te retirer.'
+              '⚠️ Tu participes déjà à ce giveaway.'
             );
           }
 
@@ -7910,29 +6853,26 @@ if (
 
           db.prepare(`
             UPDATE giveaways
-            SET participants = ?
-            WHERE id = ?
+            SET participants=?
+            WHERE id=?
           `).run(
             JSON.stringify(
               participants
             ),
-            giveaway.id
+            id
           );
 
-          const updated =
-            db.prepare(`
-              SELECT *
-              FROM giveaways
-              WHERE id = ?
-            `).get(
-              giveaway.id
-            );
-
-          await updateGiveawayMessage(
-            updated
+          await editGiveaway(
+            db
+              .prepare(
+                'SELECT * FROM giveaways WHERE id=?'
+              )
+              .get(
+                id
+              )
           );
 
-          return textReply(
+          return replyText(
             interaction,
             '🎉 Tu participes maintenant au giveaway !'
           );
@@ -7947,16 +6887,17 @@ if (
             'giveaway_leave:'
           )
         ) {
-          const giveawayId =
+          const id =
             Number(
-              interaction.customId
-                .split(':')[1]
+              interaction.customId.split(
+                ':'
+              )[1]
             );
 
           const confirm =
             new ButtonBuilder()
               .setCustomId(
-                `giveaway_confirm_leave:${giveawayId}`
+                `giveaway_confirm_leave:${id}`
               )
               .setLabel(
                 'Oui, quitter'
@@ -7965,79 +6906,67 @@ if (
                 ButtonStyle.Danger
               );
 
-          return v2Reply(
-            interaction,
-            container({
-              title:
+          return interaction.reply(
+            v2(
+              makeContainer(
                 'Quitter le giveaway ?',
-              description:
-                [
-                  'Tu participes actuellement à ce giveaway.',
-                  '',
-                  'Veux-tu vraiment retirer ta participation ?'
-                ].join('\n'),
-              accent:
+
+                'Tu participes actuellement à ce giveaway.\n\nVeux-tu vraiment retirer ta participation ?',
+
                 0xED4245,
-              rows: [
-                new ActionRowBuilder()
-                  .addComponents(
-                    confirm
-                  )
-              ],
-              footer:
-                'Cette confirmation est visible uniquement par toi.'
-            }),
-            true
+
+                [
+                  new ActionRowBuilder()
+                    .addComponents(
+                      confirm
+                    )
+                ],
+
+                'Confirmation visible uniquement par toi.'
+              ),
+              true
+            )
           );
         }
-
-        // --------------------------------------------------------------------
-        // GIVEAWAY CONFIRM LEAVE
-        // --------------------------------------------------------------------
 
         if (
           interaction.customId.startsWith(
             'giveaway_confirm_leave:'
           )
         ) {
-          const giveawayId =
+          const id =
             Number(
-              interaction.customId
-                .split(':')[1]
+              interaction.customId.split(
+                ':'
+              )[1]
             );
 
           const giveaway =
-            db.prepare(`
-              SELECT *
-              FROM giveaways
-              WHERE id = ?
-            `).get(
-              giveawayId
-            );
+            db
+              .prepare(
+                'SELECT * FROM giveaways WHERE id=?'
+              )
+              .get(
+                id
+              );
 
           if (
             !giveaway
           ) {
-            return interaction.update({
-              flags:
-                MessageFlags.IsComponentsV2 |
-                MessageFlags.Ephemeral,
-
-              components: [
-                container({
-                  title:
-                    'Giveaway introuvable',
-                  description:
-                    'Ce giveaway n’existe plus.',
-                  accent:
-                    0xED4245
-                })
-              ]
-            });
+            return interaction.update(
+              v2(
+                makeContainer(
+                  'Giveaway introuvable',
+                  'Ce giveaway n’existe plus.',
+                  0xED4245
+                ),
+                true
+              )
+            );
           }
 
           const participants =
-            getGiveawayParticipants(
+            giveawayParticipants(
               giveaway
             ).filter(
               userId =>
@@ -8047,44 +6976,35 @@ if (
 
           db.prepare(`
             UPDATE giveaways
-            SET participants = ?
-            WHERE id = ?
+            SET participants=?
+            WHERE id=?
           `).run(
             JSON.stringify(
               participants
             ),
-            giveawayId
+            id
           );
 
-          const updated =
-            db.prepare(`
-              SELECT *
-              FROM giveaways
-              WHERE id = ?
-            `).get(
-              giveawayId
-            );
-
-          await updateGiveawayMessage(
-            updated
+          await editGiveaway(
+            db
+              .prepare(
+                'SELECT * FROM giveaways WHERE id=?'
+              )
+              .get(
+                id
+              )
           );
 
-          return interaction.update({
-            flags:
-              MessageFlags.IsComponentsV2 |
-              MessageFlags.Ephemeral,
-
-            components: [
-              container({
-                title:
-                  'Participation retirée',
-                description:
-                  'Tu as quitté le giveaway avec succès.',
-                accent:
-                  0x57F287
-              })
-            ]
-          });
+          return interaction.update(
+            v2(
+              makeContainer(
+                'Participation retirée',
+                'Tu as quitté le giveaway avec succès.',
+                0x57F287
+              ),
+              true
+            )
+          );
         }
 
         // --------------------------------------------------------------------
@@ -8108,20 +7028,6 @@ if (
           interaction.customId ===
           'suggestion_create'
         ) {
-          const config =
-            getConfig(
-              interaction.guild.id
-            );
-
-          if (
-            !config.systems.suggestions
-          ) {
-            return textReply(
-              interaction,
-              '❌ Les suggestions sont actuellement désactivées.'
-            );
-          }
-
           const modal =
             new ModalBuilder()
               .setCustomId(
@@ -8134,16 +7040,13 @@ if (
           const input =
             new TextInputBuilder()
               .setCustomId(
-                'suggestion_text'
+                'text'
               )
               .setLabel(
                 'Ta suggestion'
               )
               .setStyle(
                 TextInputStyle.Paragraph
-              )
-              .setPlaceholder(
-                'Explique ton idée...'
               )
               .setRequired(
                 true
@@ -8161,6 +7064,210 @@ if (
 
           return interaction.showModal(
             modal
+          );
+        }
+
+        // --------------------------------------------------------------------
+        // SUGGESTION VOTES
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId.startsWith(
+            'suggestion_up:'
+          ) ||
+          interaction.customId.startsWith(
+            'suggestion_down:'
+          )
+        ) {
+          const up =
+            interaction.customId.startsWith(
+              'suggestion_up:'
+            );
+
+          const id =
+            Number(
+              interaction.customId.split(
+                ':'
+              )[1]
+            );
+
+          const suggestion =
+            db
+              .prepare(
+                'SELECT * FROM suggestions WHERE id=?'
+              )
+              .get(
+                id
+              );
+
+          if (
+            !suggestion
+          ) {
+            return replyText(
+              interaction,
+              '❌ Suggestion introuvable.'
+            );
+          }
+
+          let upvotes =
+            JSON.parse(
+              suggestion.upvotes ||
+                '[]'
+            );
+
+          let downvotes =
+            JSON.parse(
+              suggestion.downvotes ||
+                '[]'
+            );
+
+          if (
+            up
+          ) {
+            downvotes =
+              downvotes.filter(
+                userId =>
+                  userId !==
+                  interaction.user.id
+              );
+
+            if (
+              upvotes.includes(
+                interaction.user.id
+              )
+            ) {
+              upvotes =
+                upvotes.filter(
+                  userId =>
+                    userId !==
+                    interaction.user.id
+                );
+            } else {
+              upvotes.push(
+                interaction.user.id
+              );
+            }
+          } else {
+            upvotes =
+              upvotes.filter(
+                userId =>
+                  userId !==
+                  interaction.user.id
+              );
+
+            if (
+              downvotes.includes(
+                interaction.user.id
+              )
+            ) {
+              downvotes =
+                downvotes.filter(
+                  userId =>
+                    userId !==
+                    interaction.user.id
+                );
+            } else {
+              downvotes.push(
+                interaction.user.id
+              );
+            }
+          }
+
+          db.prepare(`
+            UPDATE suggestions
+            SET
+              upvotes=?,
+              downvotes=?
+            WHERE id=?
+          `).run(
+            JSON.stringify(
+              upvotes
+            ),
+            JSON.stringify(
+              downvotes
+            ),
+            id
+          );
+
+          const channel =
+            await fetchTextChannel(
+              interaction.guild,
+              suggestion.channel_id
+            );
+
+          if (
+            channel
+          ) {
+            try {
+              const message =
+                await channel.messages.fetch(
+                  suggestion.message_id
+                );
+
+              const config =
+                getConfig(
+                  interaction.guild.id
+                );
+
+              const upButton =
+                new ButtonBuilder()
+                  .setCustomId(
+                    `suggestion_up:${id}`
+                  )
+                  .setLabel(
+                    `Pour ${upvotes.length}`
+                  )
+                  .setEmoji(
+                    '👍'
+                  )
+                  .setStyle(
+                    ButtonStyle.Success
+                  );
+
+              const downButton =
+                new ButtonBuilder()
+                  .setCustomId(
+                    `suggestion_down:${id}`
+                  )
+                  .setLabel(
+                    `Contre ${downvotes.length}`
+                  )
+                  .setEmoji(
+                    '👎'
+                  )
+                  .setStyle(
+                    ButtonStyle.Danger
+                  );
+
+              await message.edit(
+                v2(
+                  makeContainer(
+                    `Suggestion #${id}`,
+
+                    `**Auteur :** <@${suggestion.user_id}>\n\n` +
+                      `${suggestion.text}\n\n` +
+                      '**Statut :** 🕐 En attente',
+
+                    config.colors.warning,
+
+                    [
+                      new ActionRowBuilder()
+                        .addComponents(
+                          upButton,
+                          downButton
+                        )
+                    ],
+
+                    `${config.serverName} • Suggestions`
+                  )
+                )
+              );
+            } catch {}
+          }
+
+          return replyText(
+            interaction,
+            '✅ Ton vote a été enregistré.'
           );
         }
       }
@@ -8182,48 +7289,46 @@ if (
           )
         ) {
           const parts =
-            interaction.customId.split(':');
+            interaction.customId.split(
+              ':'
+            );
 
           const action =
             parts[1];
 
-          const applicationId =
-            Number(parts[2]);
+          const id =
+            Number(
+              parts[2]
+            );
+
+          const application =
+            db
+              .prepare(`
+                SELECT *
+                FROM applications
+                WHERE id=?
+                  AND guild_id=?
+              `)
+              .get(
+                id,
+                interaction.guild.id
+              );
+
+          if (
+            !application ||
+            application.status !==
+              'pending'
+          ) {
+            return replyText(
+              interaction,
+              '❌ Cette candidature est déjà traitée.'
+            );
+          }
 
           const reason =
             interaction.fields.getTextInputValue(
               'reason'
             );
-
-          const application =
-            db.prepare(`
-              SELECT *
-              FROM applications
-              WHERE id = ?
-                AND guild_id = ?
-            `).get(
-              applicationId,
-              interaction.guild.id
-            );
-
-          if (
-            !application
-          ) {
-            return textReply(
-              interaction,
-              '❌ Candidature introuvable.'
-            );
-          }
-
-          if (
-            application.status !==
-            'pending'
-          ) {
-            return textReply(
-              interaction,
-              '❌ Cette candidature a déjà été traitée.'
-            );
-          }
 
           const accepted =
             action ===
@@ -8232,11 +7337,11 @@ if (
           db.prepare(`
             UPDATE applications
             SET
-              status = ?,
-              decided_at = ?,
-              decided_by = ?,
-              reason = ?
-            WHERE id = ?
+              status=?,
+              decided_at=?,
+              decided_by=?,
+              reason=?
+            WHERE id=?
           `).run(
             accepted
               ? 'accepted'
@@ -8244,7 +7349,7 @@ if (
             Date.now(),
             interaction.user.id,
             reason,
-            applicationId
+            id
           );
 
           const config =
@@ -8287,7 +7392,7 @@ if (
           ) {
             try {
               const channel =
-                await getTextChannel(
+                await fetchTextChannel(
                   interaction.guild,
                   application.log_channel_id
                 );
@@ -8298,75 +7403,76 @@ if (
                 );
 
               await message.edit(
-                v2Message(
-                  container({
-                    title:
+                v2(
+                  makeContainer(
+                    accepted
+                      ? `Candidature #${id} acceptée`
+                      : `Candidature #${id} refusée`,
+
+                    [
+                      `**Candidat :** <@${application.user_id}>`,
+                      `**Traité par :** ${interaction.user}`,
+                      '',
+                      `**Raison :** ${reason}`,
+                      '',
                       accepted
-                        ? `Candidature #${applicationId} acceptée`
-                        : `Candidature #${applicationId} refusée`,
+                        ? '✅ Acceptée'
+                        : '❌ Refusée'
+                    ].join('\n'),
 
-                    description:
-                      [
-                        `**Candidat :** <@${application.user_id}>`,
-                        `**Traité par :** ${interaction.user}`,
-                        '',
-                        `**Raison :** ${reason}`,
-                        '',
-                        accepted
-                          ? '✅ Acceptée'
-                          : '❌ Refusée'
-                      ].join('\n'),
+                    accepted
+                      ? config.colors.success
+                      : config.colors.danger,
 
-                    accent:
-                      accepted
-                        ? 0x57F287
-                        : 0xED4245,
+                    [],
 
-                    footer:
-                      `${config.serverName} • Candidature traitée`
-                  })
+                    `${config.serverName} • Candidature traitée`
+                  )
                 )
               );
             } catch {}
           }
 
-          try {
-            const user =
-              await client.users.fetch(
+          const user =
+            await client.users
+              .fetch(
                 application.user_id
+              )
+              .catch(
+                () => null
               );
 
-            await user.send(
-              v2Message(
-                container({
-                  title:
+          if (
+            user
+          ) {
+            await user
+              .send(
+                v2(
+                  makeContainer(
                     accepted
                       ? 'Candidature acceptée'
                       : 'Candidature refusée',
 
-                  description:
-                    accepted
-                      ? [
-                          `Félicitations ! Ta candidature Staff sur **${config.serverName}** a été acceptée.`,
-                          '',
-                          `**Raison :** ${reason}`
-                        ].join('\n')
-                      : [
-                          `Ta candidature Staff sur **${config.serverName}** a été refusée.`,
-                          '',
-                          `**Raison :** ${reason}`
-                        ].join('\n'),
+                    [
+                      accepted
+                        ? `Félicitations ! Ta candidature Staff sur **${config.serverName}** a été acceptée.`
+                        : `Ta candidature Staff sur **${config.serverName}** a été refusée.`,
+                      '',
+                      `**Raison :** ${reason}`
+                    ].join('\n'),
 
-                  accent:
                     accepted
-                      ? 0x57F287
-                      : 0xED4245
-                })
+                      ? config.colors.success
+                      : config.colors.danger
+                  )
+                )
               )
-            );
-          } catch {}
+              .catch(
+                () => {}
+              );
+          }
 
-          return textReply(
+          return replyText(
             interaction,
             accepted
               ? '✅ Candidature acceptée et candidat averti.'
@@ -8375,7 +7481,7 @@ if (
         }
 
         // --------------------------------------------------------------------
-        // SUGGESTION
+        // SUGGESTION MODAL
         // --------------------------------------------------------------------
 
         if (
@@ -8387,13 +7493,8 @@ if (
               interaction.guild.id
             );
 
-          const text =
-            interaction.fields.getTextInputValue(
-              'suggestion_text'
-            );
-
           const channel =
-            await getTextChannel(
+            await fetchTextChannel(
               interaction.guild,
               config.channels.suggestions
             );
@@ -8401,113 +7502,108 @@ if (
           if (
             !channel
           ) {
-            return textReply(
+            return replyText(
               interaction,
               '❌ Le salon des suggestions est introuvable.'
             );
           }
 
+          const text =
+            interaction.fields.getTextInputValue(
+              'text'
+            );
+
           const result =
-            db.prepare(`
-              INSERT INTO suggestions (
-                guild_id,
-                channel_id,
-                message_id,
-                user_id,
+            db
+              .prepare(`
+                INSERT INTO suggestions (
+                  guild_id,
+                  channel_id,
+                  message_id,
+                  user_id,
+                  text,
+                  created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+              `)
+              .run(
+                interaction.guild.id,
+                channel.id,
+                'pending',
+                interaction.user.id,
                 text,
-                upvotes,
-                downvotes,
-                status,
-                created_at
-              )
-              VALUES (?, ?, ?, ?, ?, '[]', '[]', 'pending', ?)
-            `).run(
-              interaction.guild.id,
-              channel.id,
-              'pending',
-              interaction.user.id,
-              text,
-              Date.now()
-            );
+                Date.now()
+              );
 
-          let suggestion =
-            db.prepare(`
-              SELECT *
-              FROM suggestions
-              WHERE id = ?
-            `).get(
-              result.lastInsertRowid
-            );
-
-          const up =
+          const upButton =
             new ButtonBuilder()
               .setCustomId(
-                `suggestion_up:${suggestion.id}`
+                `suggestion_up:${result.lastInsertRowid}`
               )
               .setLabel(
                 'Pour 0'
               )
-              .setEmoji('👍')
+              .setEmoji(
+                '👍'
+              )
               .setStyle(
                 ButtonStyle.Success
               );
 
-          const down =
+          const downButton =
             new ButtonBuilder()
               .setCustomId(
-                `suggestion_down:${suggestion.id}`
+                `suggestion_down:${result.lastInsertRowid}`
               )
               .setLabel(
                 'Contre 0'
               )
-              .setEmoji('👎')
+              .setEmoji(
+                '👎'
+              )
               .setStyle(
                 ButtonStyle.Danger
               );
 
           const message =
             await channel.send(
-              v2Message(
-                container({
-                  title:
-                    `Suggestion #${suggestion.id}`,
+              v2(
+                makeContainer(
+                  `Suggestion #${result.lastInsertRowid}`,
 
-                  description:
-                    [
-                      `**Auteur :** <@${suggestion.user_id}>`,
-                      '',
-                      text,
-                      '',
-                      '**Statut :** 🕐 En attente'
-                    ].join('\n'),
+                  [
+                    `**Auteur :** <@${interaction.user.id}>`,
+                    '',
+                    text,
+                    '',
+                    '**Statut :** 🕐 En attente'
+                  ].join('\n'),
 
-                  accent:
-                    config.appearance.warningColor,
+                  config.colors.warning,
 
-                  rows: [
+                  [
                     new ActionRowBuilder()
                       .addComponents(
-                        up,
-                        down
+                        upButton,
+                        downButton
                       )
                   ],
 
-                  footer:
-                    `${config.serverName} • Suggestions`
-                })
+                  `${config.serverName} • Suggestions`
+                )
               )
             );
 
           db.prepare(`
             UPDATE suggestions
-            SET message_id = ?
-            WHERE id = ?
+            SET message_id=?
+            WHERE id=?
           `).run(
             message.id,
-            suggestion.id
+            result.lastInsertRowid
           );
 
-          return textReply(
+          return replyText(
             interaction,
             `✅ Suggestion envoyée dans ${channel}.`
           );
@@ -8519,35 +7615,19 @@ if (
 
         if (
           interaction.customId ===
-          'config_add_question'
+          'cfg_add_question'
         ) {
-          if (
-            !configAccessAllowed(
-              interaction
-            )
-          ) {
-            return textReply(
-              interaction,
-              '❌ Accès configuration refusé.'
-            );
-          }
-
           const config =
             getConfig(
               interaction.guild.id
             );
 
-          const question =
-            interaction.fields
-              .getTextInputValue(
-                'question'
-              )
-              .trim();
-
           config.applications
             .questions
             .push(
-              question
+              interaction.fields.getTextInputValue(
+                'question'
+              )
             );
 
           saveConfig(
@@ -8555,9 +7635,13 @@ if (
             config
           );
 
-          return textReply(
+          await syncAllPanels(
+            interaction.guild
+          );
+
+          return replyText(
             interaction,
-            `✅ Question #${config.applications.questions.length} ajoutée.`
+            '✅ Question ajoutée.'
           );
         }
 
@@ -8567,20 +7651,19 @@ if (
 
         if (
           interaction.customId ===
-          'config_remove_question'
+          'cfg_remove_question'
         ) {
-          const index =
-            Number(
-              interaction.fields
-                .getTextInputValue(
-                  'index'
-                )
-            ) - 1;
-
           const config =
             getConfig(
               interaction.guild.id
             );
+
+          const index =
+            Number(
+              interaction.fields.getTextInputValue(
+                'index'
+              )
+            ) - 1;
 
           if (
             !Number.isInteger(
@@ -8589,28 +7672,79 @@ if (
             !config.applications
               .questions[index]
           ) {
-            return textReply(
+            return replyText(
               interaction,
               '❌ Numéro de question invalide.'
             );
           }
 
-          const removed =
-            config.applications
-              .questions
-              .splice(
-                index,
-                1
-              );
+          config.applications
+            .questions
+            .splice(
+              index,
+              1
+            );
 
           saveConfig(
             interaction.guild.id,
             config
           );
 
-          return textReply(
+          await syncAllPanels(
+            interaction.guild
+          );
+
+          return replyText(
             interaction,
-            `✅ Question supprimée : ${removed[0]}`
+            '✅ Question supprimée.'
+          );
+        }
+
+        // --------------------------------------------------------------------
+        // CONFIG CLAIM HOURS
+        // --------------------------------------------------------------------
+
+        if (
+          interaction.customId ===
+          'cfg_claim_hours'
+        ) {
+          const config =
+            getConfig(
+              interaction.guild.id
+            );
+
+          const hours =
+            Number(
+              interaction.fields.getTextInputValue(
+                'hours'
+              )
+            );
+
+          if (
+            !Number.isFinite(
+              hours
+            ) ||
+            hours < 1 ||
+            hours > 168
+          ) {
+            return replyText(
+              interaction,
+              '❌ Entre une durée comprise entre 1 et 168 heures.'
+            );
+          }
+
+          config.giveaways
+            .claimHours =
+            hours;
+
+          saveConfig(
+            interaction.guild.id,
+            config
+          );
+
+          return replyText(
+            interaction,
+            `✅ Délai défini sur ${hours} heure(s).`
           );
         }
 
@@ -8620,7 +7754,7 @@ if (
 
         if (
           interaction.customId ===
-          'config_color_modal'
+          'cfg_color_modal'
         ) {
           const hex =
             interaction.fields
@@ -8638,9 +7772,9 @@ if (
               hex
             )
           ) {
-            return textReply(
+            return replyText(
               interaction,
-              '❌ Couleur invalide. Exemple : `#5865F2`.'
+              '❌ Couleur invalide. Exemple : #5865F2'
             );
           }
 
@@ -8649,8 +7783,7 @@ if (
               interaction.guild.id
             );
 
-          config.appearance
-            .accentColor =
+          config.colors.primary =
             parseInt(
               hex,
               16
@@ -8661,63 +7794,13 @@ if (
             config
           );
 
-          await textReply(
-            interaction,
-            `✅ Couleur principale définie sur #${hex.toUpperCase()}.`
-          );
-
           await syncAllPanels(
             interaction.guild
           );
 
-          return;
-        }
-
-        // --------------------------------------------------------------------
-        // CONFIG CLAIM HOURS
-        // --------------------------------------------------------------------
-
-        if (
-          interaction.customId ===
-          'config_claim_hours'
-        ) {
-          const hours =
-            Number(
-              interaction.fields
-                .getTextInputValue(
-                  'hours'
-                )
-            );
-
-          if (
-            !Number.isFinite(
-              hours
-            ) ||
-            hours < 1 ||
-            hours > 168
-          ) {
-            return textReply(
-              interaction,
-              '❌ Entre une durée comprise entre 1 et 168 heures.'
-            );
-          }
-
-          const config =
-            getConfig(
-              interaction.guild.id
-            );
-
-          config.giveaways.claimHours =
-            hours;
-
-          saveConfig(
-            interaction.guild.id,
-            config
-          );
-
-          return textReply(
+          return replyText(
             interaction,
-            `✅ Délai de réclamation défini sur ${hours} heure(s).`
+            `✅ Couleur mise à jour : #${hex.toUpperCase()}`
           );
         }
       }
@@ -8729,40 +7812,32 @@ if (
         error
       );
 
-      /*
-       * This is deliberately robust so the interaction doesn't silently
-       * expire when an unexpected coding error happens.
-       */
       try {
         if (
           interaction.replied ||
           interaction.deferred
         ) {
-          if (
-            interaction.isMessageComponent()
-          ) {
-            await interaction.followUp({
-              content:
-                '❌ Une erreur est survenue. Vérifie la console du bot.',
-              flags:
-                MessageFlags.Ephemeral
-            });
-          }
-        } else {
-          await interaction.reply({
+          return interaction.followUp({
             content:
               '❌ Une erreur est survenue. Vérifie la console du bot.',
             flags:
               MessageFlags.Ephemeral
           });
         }
+
+        return interaction.reply({
+          content:
+            '❌ Une erreur est survenue. Vérifie la console du bot.',
+          flags:
+            MessageFlags.Ephemeral
+        });
       } catch {}
     }
   }
 );
 
 // ============================================================================
-// UTILITY CONFIG COLOR
+// CONFIG HELPERS
 // ============================================================================
 
 function configCategoryColor(
@@ -8770,203 +7845,11 @@ function configCategoryColor(
 ) {
   return getConfig(
     guildId
-  ).appearance.accentColor;
+  ).colors.primary;
 }
 
 // ============================================================================
-// CLEAR CHANNEL
-// ============================================================================
-
-async function clearChannel(
-  channel
-) {
-  let safety =
-    0;
-
-  while (
-    safety < 200
-  ) {
-    safety++;
-
-    const messages =
-      await channel.messages.fetch({
-        limit: 100
-      });
-
-    if (
-      !messages.size
-    ) {
-      break;
-    }
-
-    const recent =
-      messages.filter(
-        message =>
-          Date.now() -
-            message.createdTimestamp <
-          14 *
-            24 *
-            60 *
-            60 *
-            1000
-      );
-
-    const old =
-      messages.filter(
-        message =>
-          Date.now() -
-            message.createdTimestamp >=
-          14 *
-            24 *
-            60 *
-            60 *
-            1000
-      );
-
-    if (
-      recent.size
-    ) {
-      try {
-        await channel.bulkDelete(
-          recent,
-          true
-        );
-      } catch {
-        for (
-          const message of recent.values()
-        ) {
-          try {
-            await message.delete();
-          } catch {}
-        }
-      }
-    }
-
-    if (
-      old.size
-    ) {
-      for (
-        const message of old.values()
-      ) {
-        try {
-          await message.delete();
-        } catch {}
-      }
-    }
-
-    if (
-      messages.size < 100
-    ) {
-      break;
-    }
-  }
-}
-
-// ============================================================================
-// PARSE DURATION
-// ============================================================================
-
-function parseDuration(
-  input
-) {
-  const text =
-    String(input)
-      .toLowerCase()
-      .replace(
-        /\s+/g,
-        ''
-      );
-
-  const regex =
-    /(\d+)(s|m|h|d|w)/g;
-
-  let total =
-    0;
-
-  let found =
-    false;
-
-  let match;
-
-  while (
-    (match =
-      regex.exec(text))
-  ) {
-    found =
-      true;
-
-    const amount =
-      Number(
-        match[1]
-      );
-
-    switch (
-      match[2]
-    ) {
-      case 's':
-        total +=
-          amount *
-          1000;
-        break;
-
-      case 'm':
-        total +=
-          amount *
-          60 *
-          1000;
-        break;
-
-      case 'h':
-        total +=
-          amount *
-          60 *
-          60 *
-          1000;
-        break;
-
-      case 'd':
-        total +=
-          amount *
-          24 *
-          60 *
-          60 *
-          1000;
-        break;
-
-      case 'w':
-        total +=
-          amount *
-          7 *
-          24 *
-          60 *
-          60 *
-          1000;
-        break;
-    }
-  }
-
-  return found
-    ? total
-    : null;
-}
-
-// ============================================================================
-// GIVEAWAY ANNOUNCEMENT / CLAIM REPAIR
-// ============================================================================
-
-/*
- * If the bot restarts while a giveaway is awaiting claim,
- * processGiveaways() will continue from the database.
- *
- * That means:
- * - the 24h timer survives restart
- * - current winner survives restart
- * - expired winners survive restart
- * - the ticket claim state survives restart
- */
-
-// ============================================================================
-// ERROR HANDLERS
+// ERRORS
 // ============================================================================
 
 client.on(
@@ -9016,7 +7899,7 @@ client
   .catch(
     error => {
       console.error(
-        '❌ Impossible de connecter le bot:',
+        '❌ Connexion Discord impossible:',
         error
       );
 
